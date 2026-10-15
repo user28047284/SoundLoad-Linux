@@ -9,12 +9,11 @@ struct cfg_format
 	std::string track_out_dir;
 	bool get_track_audio     = true;
 	bool get_track_art       = false;
-	bool get_aac_transcoding = false;
-	bool aac_fallback        = false;
 };
 
-// Missing keys keep their default values so config files from older versions still load
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(cfg_format, cid, art_out_dir, track_out_dir, get_track_audio, get_track_art, get_aac_transcoding, aac_fallback)
+// Missing keys keep their default values and unknown keys (such as the removed AAC options)
+// are ignored, so config files from older versions still load
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(cfg_format, cid, art_out_dir, track_out_dir, get_track_audio, get_track_art)
 
 // CONFIG DATA
 
@@ -26,7 +25,7 @@ namespace cfg
 
 	struct cfg_flags_t
 	{
-		// 16/16 bits used
+		// 13/16 bits used
 
 		uint16_t add_to_path       : 1; // Adds program to PATH variables
 		uint16_t save_cfg          : 1; // Saves applicable arguments to config (set when -save is used)
@@ -35,15 +34,12 @@ namespace cfg
 		uint16_t no_seperate_art   : 1; // [saveable] [default] disables the seperate_art flag if it was saved to config
 		uint16_t download_audio    : 1; // [saveable] [default] reenables audio downloads if disabled by no_audio_download in config
 		uint16_t no_audio_download : 1; // [saveable] disables audio downloads
-		uint16_t use_aac           : 1; // [saveable] Downloads lossless m4a media transcoding
-		uint16_t no_aac            : 1; // [saveable] [default] Disables lessless m4a media transcoding downloads
 		uint16_t no_link_provided  : 1; // Indicates that no link was provided - used when modifying config without downloading anything
 		uint16_t cover_src_path    : 1; // Provided source for audio cover art is an image path on the computer
 		uint16_t cover_src_sc_link : 1; // Provided source for audio cover art is a SoundCloud link (uses cover art from song/profile)
 		uint16_t fresh_cfg         : 1; // cfg.json was just created
-		uint16_t use_aac_fallback  : 1; // [saveable] Downloads AAC when a track has no MPEG transcoding
-		uint16_t no_aac_fallback   : 1; // [saveable] [default] Fails when a track has no MPEG transcoding
 		uint16_t use_xdg           : 1; // Stores cfg.json in the XDG config directory
+		uint16_t parse_title       : 1; // Splits "Artist - Title" track names into artist + title (not saveable)
 	} inline f = {};
 
 	struct track_data_t
@@ -101,16 +97,6 @@ namespace cfg
 	inline bool art_flags_set(void)
 	{
 		return cfg::f.seperate_art || cfg::f.no_seperate_art;
-	}
-
-	inline bool aac_flags_set(void)
-	{
-		return cfg::f.use_aac || cfg::f.no_aac;
-	}
-
-	inline bool aac_fallback_flags_set(void)
-	{
-		return cfg::f.use_aac_fallback || cfg::f.no_aac_fallback;
 	}
 
 	inline bool cover_art_only(void)

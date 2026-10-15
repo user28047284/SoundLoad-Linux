@@ -8,9 +8,8 @@ who designed and wrote the original code. Please report issues on this repositor
 
 Only download content you have the right to save.
 
-If you prefer porting music to Spotify or Apple Music, you should not enable AAC 
-downloads, as neither platforms will play them. The difference in bitrate is
-negligible anyway, so this should only be used if you care about archiving.
+SoundCloud only serves AAC now, so tracks are saved as `.m4a`. To play them in Spotify on Linux 
+and sync them to your phone, see [SPOTIFY.md](SPOTIFY.md).
 
 ## Installation & usage
 Install the dependencies (a C++20 compiler, CMake, pkg-config, libcurl and TagLib 2.x):
@@ -18,6 +17,12 @@ Install the dependencies (a C++20 compiler, CMake, pkg-config, libcurl and TagLi
 - Arch: `sudo pacman -S --needed base-devel cmake pkgconf curl taglib`
 - Debian/Ubuntu: `sudo apt install build-essential cmake pkg-config libcurl4-openssl-dev libtag-dev`
 - Fedora: `sudo dnf install gcc-c++ cmake pkgconf-pkg-config libcurl-devel taglib-devel`
+
+`ffmpeg` is an optional (but recommended) runtime dependency. SoundCloud serves
+AAC as HLS fragments, which are joined into a "fragmented MP4" whose header reports a duration of 0,
+so players like Spotify show no track length. If `ffmpeg` is on your `PATH`, `sl` repackages the file
+(stream copy, no re-encoding) so the real duration is stored. Without `ffmpeg` the download still
+works and you get a warning.
 
 Then build (and optionally install) the program:
 ```
@@ -49,10 +54,6 @@ Run `sl '-?'` to see a list of all available features, or reference the table be
 | `-audio-dst`      |  `-adst` | Audio output directory                               |     ✅    |
 | `-audio`          |     —    | Enables audio downloads                              |     ✅    |
 | `-n-audio`        |     —    | Disables audio downloads                             |     ✅    |
-| `-aac`            |     —    | Enables AAC downloads                                |     ✅    |
-| `-n-aac`          |     —    | Disables AAC downloads                               |     ✅    |
-| `-aac-fallback`   |     —    | Downloads AAC if a track has no MP3                  |     ✅    |
-| `-n-aac-fallback` |     —    | Disables AAC fallback                                |     ✅    |
 | `-title`          |   `-t`   | Audio tag title                                      |     ❌    |
 | `-comment`        |   `-c`   | Audio tag comment                                    |     ❌    |
 | `-artists`        |   `-a`   | Audio tag contributing artists                       |     ❌    |
@@ -61,6 +62,7 @@ Run `sl '-?'` to see a list of all available features, or reference the table be
 | `-genre`          |   `-g`   | Audio tag genre                                      |     ❌    |
 | `-num`            |   `-n`   | Audio tag track number                               |     ❌    |
 | `-year`           |   `-y`   | Audio tag year                                       |     ❌    |
+| `-parse`          |   `-p`   | Split "Artist - Title" track names into artist + title |     ❌    |
 
 
 ## Examples
@@ -76,6 +78,17 @@ This will download the song, name the audio file "Extra Stixx", and set the cont
 Other metadata will be automatically scraped from the page, but can of course be set manually.
 ```
 $ sl https://soundcloud.com/fat-kid-915108395/exrta-stixxs-ft-pook-g-lul -aname "Extra Stixx" -a "Pook G, Lul Jody"
+```
+
+### Parsing the artist from the track name
+Many uploads put the artist in the track name. With `-p`, a title like
+"ISLURWHENITALK X 2SHANEZ - KILLEMALL (PROD. NIKO EAST)" is tagged with the artist
+"ISLURWHENITALK X 2SHANEZ" and the title "KILLEMALL (PROD. NIKO EAST)". The split happens at the first
+" - " (a hyphen, en dash or em dash with a space on each side), so names like "Mid-Air" are left alone.
+`-title` and `-artists` always win over the parsed values, and the file name still uses the full track
+name unless you set `-aname`.
+```
+$ sl https://soundcloud.com/some-artist/some-track -p
 ```
 
 ### Downloading cover art
@@ -123,9 +136,7 @@ That being said, please open an issue on this repository if it's failing to reso
 a client ID automatically, as failure is indicative of a SoundCloud update.
 
 ## Notes
-- SoundCloud currently doesn't provide MP3 streams for many tracks. These fail by default since 
-  `.m4a` files won't play as Spotify or Apple Music local files; use `-aac` to download them anyway, 
-  or `-aac-fallback` to do so automatically. If a track only has a 96 kbps AAC stream, that is used.
+- Tracks are downloaded as 160 kbps AAC. If a track only has a 96 kbps AAC stream, that is used.
 - `nlohmann::json::value` has multiple modifications in this repo - check `pch.hpp` for more info.
 - Unicode characters are supported in file names and metadata.
 - The following characters will be replaced with an underscore in file names: `< > : " / \ | ? *`

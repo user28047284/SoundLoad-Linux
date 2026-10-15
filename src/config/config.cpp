@@ -23,10 +23,6 @@ namespace cfg
 		std::cout << "-n-audio   ; [SAVEABLE] disables the download of audio files\n";
 		std::cout << "-art       ; [SAVEABLE] enables cover art downloads\n";
 		std::cout << "-n-art     ; [SAVEABLE, DEFAULT] disables cover art downloads\n";
-		std::cout << "-aac       ; [SAVEABLE] enables AAC audio download (apple music and spotify wont play these files)\n";
-		std::cout << "-n-aac     ; [SAVEABLE, DEFAULT] disables AAC audio download (highest bitrate MPEG used)\n";
-		std::cout << "-aac-fallback   ; [SAVEABLE] downloads AAC when a track has no MPEG (MP3) stream\n";
-		std::cout << "-n-aac-fallback ; [SAVEABLE, DEFAULT] fails when a track has no MPEG (MP3) stream\n";
 		std::cout << "-pvars     ; shows how to add the program to PATH (asks before changing any file)\n";
 		std::cout << "-cid <cid> ; [SAVEABLE] sets the client ID (use only if you know what you're doing)\n";
 		std::cout << "-xdg       ; stores cfg.json in ~/.config/soundload instead of the program directory (used automatically once it exists there)\n";
@@ -48,6 +44,7 @@ namespace cfg
 		std::cout << "(-g)  -genre <genre>      ; genre property of audio tag (defaults to parsed genre from track)\n";
 		std::cout << "(-n)  -num <track number> ; track number property of audio tag (defaults to track number in album if track is in an album)\n";
 		std::cout << "(-y)  -year <year>        ; year property of audio tag (defaults to year of upload date)\n";
+		std::cout << "(-p)  -parse              ; splits a track name like \"Artist - Song\" into artist + title (uses the first \" - \"; -title and -artists still win)\n";
 	}
 
 	bool parse_arguments(int argc, const char* const argv[])
@@ -101,11 +98,9 @@ namespace cfg
 			case hash("audio"):   { cfg::f.download_audio    = true; break; }
 			case hash("n-audio"): { cfg::f.no_audio_download = true; break; }
 			case hash("pvars"):   { cfg::f.add_to_path       = true; break; }
-			case hash("aac"):     { cfg::f.use_aac           = true; break; }
-			case hash("n-aac"):   { cfg::f.no_aac            = true; break; }
-			case hash("aac-fallback"):   { cfg::f.use_aac_fallback = true; break; }
-			case hash("n-aac-fallback"): { cfg::f.no_aac_fallback  = true; break; }
 			case hash("xdg"):            { cfg::f.use_xdg          = true; break; }
+			case hash("p"):              { [[fallthrough]]; }
+			case hash("parse"):          { cfg::f.parse_title      = true; break; }
 
 			default: handled = false;
 			}
@@ -246,16 +241,6 @@ namespace cfg
 		{
 			cfg::f.seperate_art = true;
 		}
-
-		if (!cfg::aac_flags_set() && data.get_aac_transcoding)
-		{
-			cfg::f.use_aac = true;
-		}
-
-		if (!cfg::aac_fallback_flags_set() && data.aac_fallback)
-		{
-			cfg::f.use_aac_fallback = true;
-		}
 	}
 
 	void save_config(cfg_format& data)
@@ -283,16 +268,6 @@ namespace cfg
 		if (cfg::art_flags_set())
 		{
 			data.get_track_art = cfg::f.seperate_art;
-		}
-
-		if (cfg::aac_flags_set())
-		{
-			data.get_aac_transcoding = cfg::f.use_aac;
-		}
-
-		if (cfg::aac_fallback_flags_set())
-		{
-			data.aac_fallback = cfg::f.use_aac_fallback;
 		}
 	}
 

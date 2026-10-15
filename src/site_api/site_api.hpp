@@ -26,6 +26,7 @@ private:
 	std::string  artist;
 	std::string  album_artist;
 	std::string  title;
+	std::string  file_title; // base for default file names, set before -parse changes the tag title
 	unsigned int year = 0u;
 	unsigned int num  = 0u;
 
@@ -53,8 +54,6 @@ private:
 
 	void add_m4a_tag(const std::string& path) const;
 
-	void add_mp3_tag(const std::string& path) const;
-
 	void get_misc_metadata(void);
 
 	void create_comments(void);
@@ -75,13 +74,11 @@ public:
 
 	struct
 	{
-		// 5/8 bits used
+		// 3/8 bits used
 
 		uint8_t error_occured : 1; // An error occured in the constructor
 		uint8_t is_track      : 1; // Object represents a singular track
 		uint8_t is_album      : 1; // Object represents an album or playlist
-		uint8_t is_m4a_media  : 1; // Lossless media transcoding (.m3u8 -> .m4a)
-		uint8_t is_hls_mpeg   : 1; // HLS media transcoding (.m3u -> .mp3)
 	} f = {};
 
 	//

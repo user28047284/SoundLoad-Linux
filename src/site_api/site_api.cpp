@@ -3,6 +3,11 @@
 #include "../config/config.hpp"
 #include "site_api.hpp"
 
+#include <spawn.h>
+#include <sys/wait.h>
+
+extern char** environ;
+
 //
 //// HELPER FUNCTIONS
 //
@@ -10,6 +15,120 @@
 static net::Response get_timed(const std::string& url)
 {
 	return net::get(url, 4500);
+}
+
+// Runs "ffmpeg -i input -map 0 -c copy -movflags +faststart -f ipod output". This only repackages
+// the audio (no re-encoding, nothing is lost). The format is given explicitly because the file
+// names used during a download don't end in ".m4a". Spawned directly instead of through a shell so
+// file names never need quoting. Returns false if ffmpeg is missing or exits with an error.
+static bool remux_with_ffmpeg(const std::string& input, const std::string& output)
+{
+	const char* const args[] =
+	{
+		"ffmpeg", "-nostdin", "-v", "error", "-y",
+		"-i", input.c_str(),
+		"-map", "0", "-c", "copy", "-movflags", "+faststart", "-f", "ipod",
+		output.c_str(),
+		nullptr
+	};
+
+	pid_t pid = 0;
+	if (posix_spawnp(&pid, "ffmpeg", nullptr, nullptr, const_cast<char* const*>(args), environ) != 0)
+	{
+		return false; // ffmpeg not found (or could not be started)
+	}
+
+	int status = 0;
+	if (waitpid(pid, &status, 0) < 0)
+	{
+		return false;
+	}
+
+	return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+// SoundCloud's AAC streams are HLS fragments. Joining them gives a "fragmented MP4" whose
+// header says the duration is 0, so players such as Spotify show no track length. Remuxing
+// writes a regular MP4 with the real duration. If anything goes wrong the original file is
+// left exactly as it was, so a failed repair never costs you the download.
+static void repair_fragmented_m4a(const std::string& path)
+{
+	namespace fs = std::filesystem;
+
+	const fs::path repaired = path + ".repair";
+
+	std::error_code ec;
+
+	if (!remux_with_ffmpeg(path, repaired.string()))
+	{
+		err::warn("could not repair \"{}\" (is ffmpeg installed?). The track will play, but some players will not show its length", path);
+		fs::remove(repaired, ec);
+		return;
+	}
+
+	const std::uintmax_t size = fs::file_size(repaired, ec);
+	if (ec || size == 0)
+	{
+		err::warn("ffmpeg produced an empty file while repairing \"{}\", keeping the original", path);
+		fs::remove(repaired, ec);
+		return;
+	}
+
+	fs::rename(repaired, path, ec); // replaces the original
+
+	if (ec)
+	{
+		err::warn("could not replace \"{}\" with the repaired file: {}", path, ec.message());
+		fs::remove(repaired, ec);
+	}
+}
+
+// Splits "Artist - Song" into its two halves at the FIRST separator, which is a hyphen, en dash
+// or em dash with a space on each side (so "Mid-Air" or "AC/DC" are never split). Everything after
+// the separator is kept, e.g. "A - B - Remix" -> "A" and "B - Remix". Returns false (and leaves
+// both strings untouched) if there is no separator or either half would be empty.
+static bool split_artist_and_title(const std::string& full, std::string& artist, std::string& title)
+{
+	const std::string_view separators[] = { " - ", " \xE2\x80\x93 ", " \xE2\x80\x94 " };
+
+	size_t sep_pos = std::string::npos;
+	size_t sep_len = 0;
+
+	for (const std::string_view sep : separators)
+	{
+		const size_t pos = full.find(sep);
+
+		if (pos < sep_pos)
+		{
+			sep_pos = pos;
+			sep_len = sep.size();
+		}
+	}
+
+	if (sep_pos == std::string::npos)
+	{
+		return false;
+	}
+
+	auto trim = [](const std::string& text)
+		{
+			constexpr const char* whitespace = " \t\r\n";
+			const size_t first = text.find_first_not_of(whitespace);
+			if (first == std::string::npos) return std::string{};
+			return text.substr(first, text.find_last_not_of(whitespace) - first + 1);
+		};
+
+	const std::string left  = trim(full.substr(0, sep_pos));
+	const std::string right = trim(full.substr(sep_pos + sep_len));
+
+	if (left.empty() || right.empty())
+	{
+		return false;
+	}
+
+	artist = left;
+	title  = right;
+	return true;
 }
 
 bool get_client_id(void)
@@ -277,57 +396,6 @@ void sc_upload::add_m4a_tag(const std::string& path) const
 	}
 }
 
-void sc_upload::add_mp3_tag(const std::string& path) const
-{
-	// Creating tag & saving basic metadata
-
-	TagLib::MPEG::File file(path.c_str());
-	TagLib::ID3v2::Tag* const tag = file.ID3v2Tag(true);
-
-	this->store_basic_tag_data(tag);
-
-	if (!this->album_artist.empty())
-	{
-		auto frame = new TagLib::ID3v2::TextIdentificationFrame("TPE2", TagLib::String::UTF8); // taglib takes ownership
-		frame->setText(TagLib::String(this->album_artist, TagLib::String::UTF8));
-		tag->addFrame(frame);
-	}
-
-	// Setting cover art
-
-	TagLib::ByteVector raw_image;
-
-	if (cfg::f.cover_src_path)
-	{
-		if (!read_cover_file(file, raw_image))
-		{
-			return;
-		}
-	}
-	else
-	{
-		net::Response r;
-		if (!this->get_cover_art(r))
-		{
-			file.save();
-			return;
-		}
-
-		raw_image = { r.text.data(), static_cast<unsigned int>(r.text.size()) };
-	}
-	
-	auto cover = new TagLib::ID3v2::AttachedPictureFrame; // not using std::make_unique because taglib takes ownership of the object
-	cover->setMimeType(is_jpeg(raw_image) ? "image/jpeg" : "image/png");
-	cover->setType(TagLib::ID3v2::AttachedPictureFrame::FrontCover);
-	cover->setPicture(raw_image);
-	tag->addFrame(cover);
-
-	if (!file.save())
-	{
-		err::warn("failed to save ID3v2 tag");
-	}
-}
-
 bool sc_upload::get_track_ids(void)
 {
 	const auto tracks = this->post_data.value("tracks", Json{});
@@ -347,17 +415,16 @@ bool sc_upload::get_track_ids(void)
 
 bool sc_upload::parse_manifest(const std::string& raw_data, std::vector<std::shared_future<net::Response>>& buffer)
 {
-	// This is used to download .m3u/.m3u8 files. Both file types are similar, 
-	// with each containing an array of links that lead to file segments, which 
-	// you must append to eachother in the order of which the links are provided.
-	// All HLS transcodings I've seen lead to these, which is why we want progressive.
+	// This is used to download .m3u8 files, which contain an array of links that lead
+	// to file segments, which you must append to eachother in the order of which the
+	// links are provided. The first link (#EXT-X-MAP) is the MP4 header.
 
 	std::istringstream iss(raw_data);
 	std::string line;
 
 	for (uint8_t active_threads = 0; std::getline(iss, line);)
 	{
-		if (this->f.is_m4a_media && line.starts_with("#EXT-X-MAP:URI="))
+		if (line.starts_with("#EXT-X-MAP:URI="))
 		{
 			line.erase(0, line.find_first_of('\"') + 1);
 			line.pop_back();
@@ -445,11 +512,7 @@ bool sc_upload::parse_manifest(const std::string& raw_data, std::vector<std::sha
 
 bool sc_upload::get_streaming_url(void)
 {
-	// We prefer progressive transcodings over HLS because progressive transcodings only require 
-	// one request to download the entire track, but HLS requires 10+ requests and forces you to 
-	// parse a manifest to get each link. Multi-threading significantly improves this process, but 
-	// even if it took the exact same amount of time as progressive downloads, we will want to 
-	// minimize requests to reduce the chances of rate limiting.
+	// SoundCloud only serves AAC (as HLS) now. aac_96k is only used without aac_160k.
 
 	auto list = this->post_data.value("media", Json{});
 	if (list.empty())
@@ -465,93 +528,30 @@ bool sc_upload::get_streaming_url(void)
 		return false;
 	}
 
-	bool found = false, progressive_found = false;
-
-	for (const auto& transcoding : list)
+	for (const char* preset : { "aac_160k", "aac_96k" })
 	{
-		// AAC transcodings are highest quality, and provide .m4a files rather than .mp3.
-		// You can't play these files Spotify or Apple Music so don't use for local files.
-
-		if (transcoding["preset"] != "aac_160k")
+		for (const auto& transcoding : list)
 		{
-			const auto format = transcoding["format"];
-			const auto protocol = format["protocol"];
-
-			if (protocol == "progressive" || format["mime_type"] == "audio/mpeg")
+			if (transcoding["preset"] == preset)
 			{
+				if (std::string_view(preset) == "aac_96k")
+				{
+					err::warn("only a 96 kbps AAC stream is available for this track");
+				}
+
 				this->streaming_url = transcoding["url"].get<std::string>() + "?client_id=" + cfg::client_id;
-				found = true;
-
-				if (protocol != "hls")
-				{
-					progressive_found = true;
-					break;
-				}
+				return true;
 			}
-		}
-		else if (cfg::f.use_aac)
-		{
-			this->streaming_url  = transcoding["url"].get<std::string>() + "?client_id=" + cfg::client_id;
-			this->f.is_m4a_media = true;
-
-			found = true;
-			break;
 		}
 	}
 
-	// SoundCloud no longer provides MPEG transcodings for many tracks. AAC is only used instead
-	// if requested. aac_96k is only used without aac_160k, it's lower quality than MPEG (128k).
-
-	if (!found)
-	{
-		for (const char* preset : { "aac_160k", "aac_96k" })
-		{
-			for (const auto& transcoding : list)
-			{
-				if (transcoding["preset"] == preset)
-				{
-					this->streaming_url  = transcoding["url"].get<std::string>() + "?client_id=" + cfg::client_id;
-					this->f.is_m4a_media = true;
-					found = true;
-					break;
-				}
-			}
-
-			if (!found) continue;
-
-			if (!cfg::f.use_aac && !cfg::f.use_aac_fallback)
-			{
-				err::log("no MP3 stream is available for this track, use -aac to download it as .m4a (or -aac-fallback to do this automatically)");
-				return false;
-			}
-
-			if (!cfg::f.use_aac)
-			{
-				err::warn("no MP3 stream is available for this track, downloading AAC (.m4a) instead");
-			}
-
-			if (std::string_view(preset) == "aac_96k")
-			{
-				err::warn("only a 96 kbps AAC stream is available for this track");
-			}
-
-			break;
-		}
-	}
-
-	if (!found)
-	{
-		err::log("failed to locate valid media transcoding");
-		return false;
-	}
-
-	this->f.is_hls_mpeg = !progressive_found;
-	return true;
+	err::log("failed to locate valid media transcoding");
+	return false;
 }
 
 bool sc_upload::download_track(void)
 {
-	// Downloading track (MP3 or M4A)
+	// Downloading track
 
 	net::Response r = get_timed(this->streaming_url);
 	if (request_failed(r)) return false;
@@ -564,77 +564,74 @@ bool sc_upload::download_track(void)
 	// Finalizing download
 
 	std::vector<std::shared_future<net::Response>> hls_parts;
-	const char* raw_audio  = nullptr;
-	size_t      audio_size = 0;
-	const bool  use_parts  = this->f.is_hls_mpeg || this->f.is_m4a_media;
 
-	if (!use_parts)
-	{
-		raw_audio  = r.text.data();
-		audio_size = r.text.size();
-	}
-	else if (!this->parse_manifest(r.text, hls_parts))
+	if (!this->parse_manifest(r.text, hls_parts))
 	{
 		return false;
 	}
 
 	// Writing track to disk
 
-	const std::string& file_name = cfg::g_data.audio_name.empty() ? this->title : cfg::g_data.audio_name;
-	const std::string path = cfg::audio_dir + sanitize_filename(file_name) + (this->f.is_m4a_media ? ".m4a" : ".mp3");
+	const std::string& file_name = cfg::g_data.audio_name.empty() ? this->file_title : cfg::g_data.audio_name;
+	const std::string name = sanitize_filename(file_name) + ".m4a";
+	const std::string path = cfg::audio_dir + name;
 
-	std::ofstream file(path, std::ios::binary | std::ios::trunc);
+	// The track is written, repaired and tagged under a hidden temporary name, then renamed into
+	// place. Music players that watch the folder (Spotify does) read a file as soon as it shows
+	// up and cache what they find, so they must never see it before its tags are written.
+	const std::string temp_path = cfg::audio_dir + "." + name + ".part";
+
+	std::ofstream file(temp_path, std::ios::binary | std::ios::trunc);
 	if (file.fail())
 	{
-		err::log("failed to create file at \"{}\"", path);
+		err::log("failed to create file at \"{}\"", temp_path);
 		return false;
 	}
 
 	bool failed = false;
 
-	if (use_parts)
+	for (auto& future : hls_parts)
 	{
-		for (auto& future : hls_parts)
+		if (!future.valid())
 		{
-			if (!future.valid())
-			{
-				throw std::future_error(std::future_errc::no_state);
-			}
-
-			const net::Response& r = future.get();
-			file.write(r.text.c_str(), r.text.size());
-
-			if (file.fail())
-			{
-				failed = true;
-				break;
-			}
+			throw std::future_error(std::future_errc::no_state);
 		}
-	}
-	else
-	{
-		file.write(raw_audio, audio_size);
-		failed = file.fail();
+
+		const net::Response& r = future.get();
+		file.write(r.text.c_str(), r.text.size());
+
+		if (file.fail())
+		{
+			failed = true;
+			break;
+		}
 	}
 
 	file.close();
 	hls_parts.clear();
 
+	std::error_code ec;
+
 	if (failed)
 	{
-		err::log("failed to write to file \"{}\"", path);
+		err::log("failed to write to file \"{}\"", temp_path);
+		std::filesystem::remove(temp_path, ec);
 		return false;
 	}
 
 	// Adding tag
 
-	if (this->f.is_m4a_media)
+	// Must happen before tagging: the repair rewrites the file, the tags are added to the result
+	repair_fragmented_m4a(temp_path);
+	this->add_m4a_tag(temp_path);
+
+	std::filesystem::rename(temp_path, path, ec); // replaces an existing download of the track
+
+	if (ec)
 	{
-		this->add_m4a_tag(path);
-	}
-	else
-	{
-		this->add_mp3_tag(path);
+		err::log("failed to move \"{}\" to \"{}\": {}", temp_path, path, ec.message());
+		std::filesystem::remove(temp_path, ec);
+		return false;
 	}
 
 	return true;
@@ -651,7 +648,7 @@ bool sc_upload::download_cover(void) const
 	net::Response r = get_timed(this->artwork_url);
 	if (r.status_code != 200) return false;
 
-	const std::string& file_name = cfg::g_data.image_name.empty() ? this->title : cfg::g_data.image_name;
+	const std::string& file_name = cfg::g_data.image_name.empty() ? this->file_title : cfg::g_data.image_name;
 	const std::string path = cfg::image_dir + sanitize_filename(file_name) + ".jpg";
 
 	std::ofstream file(path, std::ios::binary | std::ios::trunc);
@@ -806,6 +803,38 @@ void sc_upload::get_art_and_title(void)
 		this->title = cfg::g_data.title;
 	}
 
+	// File names are derived from the full track title, so "-parse" can shorten the tag
+	// title without two songs called "Intro" ending up with the same file name.
+
+	this->file_title = this->title;
+
+	// Parsing "Artist - Title" (-parse). Anything given explicitly with -title / -artists wins.
+
+	if (cfg::f.parse_title)
+	{
+		std::string parsed_artist;
+		std::string parsed_title;
+
+		if (!split_artist_and_title(post_data.value("title"), parsed_artist, parsed_title))
+		{
+			err::warn("-parse: no \"Artist - Title\" pattern in \"{}\", keeping the original title and artist", post_data.value("title"));
+		}
+		else
+		{
+			if (cfg::g_data.title.empty())
+			{
+				this->title = parsed_title;
+			}
+
+			if (cfg::g_data.contrib_artists.empty())
+			{
+				this->artist = parsed_artist;
+			}
+
+			std::cout << "parsed artist \"" << this->artist << "\", title \"" << this->title << "\"\n";
+		}
+	}
+
 	// Getting artwork URL
 
 	this->artwork_url = post_data.value("artwork_url", post_data.value("avatar_url"));
@@ -814,7 +843,7 @@ void sc_upload::get_art_and_title(void)
 		fix_artwork_url(this->artwork_url);
 	}
 
-	// Getting MP3 artwork source
+	// Getting embedded artwork source
 
 	if (cfg::image_src.empty())
 	{
