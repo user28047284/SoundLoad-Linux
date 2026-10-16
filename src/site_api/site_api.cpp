@@ -5,6 +5,7 @@
 
 #include <spawn.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 extern char** environ;
 
@@ -17,11 +18,18 @@ static net::Response get_timed(const std::string& url)
 	return net::get(url, 4500);
 }
 
+enum class remux_result
+{
+	ok,
+	ffmpeg_missing, // ffmpeg is not installed (or could not be started)
+	failed          // ffmpeg ran but could not read or write the file
+};
+
 // Runs "ffmpeg -i input -map 0 -c copy -movflags +faststart -f ipod output". This only repackages
 // the audio (no re-encoding, nothing is lost). The format is given explicitly because the file
 // names used during a download don't end in ".m4a". Spawned directly instead of through a shell so
-// file names never need quoting. Returns false if ffmpeg is missing or exits with an error.
-static bool remux_with_ffmpeg(const std::string& input, const std::string& output)
+// file names never need quoting.
+static remux_result remux_with_ffmpeg(const std::string& input, const std::string& output)
 {
 	const char* const args[] =
 	{
@@ -35,23 +43,24 @@ static bool remux_with_ffmpeg(const std::string& input, const std::string& outpu
 	pid_t pid = 0;
 	if (posix_spawnp(&pid, "ffmpeg", nullptr, nullptr, const_cast<char* const*>(args), environ) != 0)
 	{
-		return false; // ffmpeg not found (or could not be started)
+		return remux_result::ffmpeg_missing;
 	}
 
 	int status = 0;
 	if (waitpid(pid, &status, 0) < 0)
 	{
-		return false;
+		return remux_result::failed;
 	}
 
-	return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+	return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? remux_result::ok : remux_result::failed;
 }
 
 // SoundCloud's AAC streams are HLS fragments. Joining them gives a "fragmented MP4" whose
 // header says the duration is 0, so players such as Spotify show no track length. Remuxing
-// writes a regular MP4 with the real duration. If anything goes wrong the original file is
-// left exactly as it was, so a failed repair never costs you the download.
-static void repair_fragmented_m4a(const std::string& path)
+// writes a regular MP4 with the real duration. If ffmpeg is missing the file is kept as it is.
+// Returns false if ffmpeg could not read the file, which means the download is not valid audio.
+// name is the track's file name, used in messages instead of the temporary path.
+static bool repair_fragmented_m4a(const std::string& path, const std::string& name)
 {
 	namespace fs = std::filesystem;
 
@@ -59,28 +68,37 @@ static void repair_fragmented_m4a(const std::string& path)
 
 	std::error_code ec;
 
-	if (!remux_with_ffmpeg(path, repaired.string()))
+	switch (remux_with_ffmpeg(path, repaired.string()))
 	{
-		err::warn("could not repair \"{}\" (is ffmpeg installed?). The track will play, but some players will not show its length", path);
+	case remux_result::ok:
+		break;
+
+	case remux_result::ffmpeg_missing:
+		err::warn("ffmpeg is not installed, \"{}\" will play but some players will not show its length", name);
+		return true;
+
+	case remux_result::failed:
 		fs::remove(repaired, ec);
-		return;
+		return false;
 	}
 
 	const std::uintmax_t size = fs::file_size(repaired, ec);
 	if (ec || size == 0)
 	{
-		err::warn("ffmpeg produced an empty file while repairing \"{}\", keeping the original", path);
+		err::warn("ffmpeg produced an empty file while repairing \"{}\", keeping the original", name);
 		fs::remove(repaired, ec);
-		return;
+		return true;
 	}
 
 	fs::rename(repaired, path, ec); // replaces the original
 
 	if (ec)
 	{
-		err::warn("could not replace \"{}\" with the repaired file: {}", path, ec.message());
+		err::warn("could not replace \"{}\" with the repaired file: {}", name, ec.message());
 		fs::remove(repaired, ec);
 	}
+
+	return true;
 }
 
 // Splits "Artist - Song" into its two halves at the FIRST separator, which is a hyphen, en dash
@@ -129,6 +147,14 @@ static bool split_artist_and_title(const std::string& full, std::string& artist,
 	artist = left;
 	title  = right;
 	return true;
+}
+
+// Returns parent[key] if it is an object, otherwise an empty object. SoundCloud sends some
+// objects (e.g. publisher_metadata) as null, and calling value() on a null throws.
+static Json get_object(const Json& parent, const char* key)
+{
+	const auto it = parent.find(key);
+	return it != parent.end() && it->is_object() ? *it : Json::object();
 }
 
 bool get_client_id(void)
@@ -189,6 +215,54 @@ static void fix_artwork_url(std::string& url)
 	{
 		err::warn("failed to locate original cover art, falling back to default artwork URL");
 	}
+}
+
+// Downloads cover art from a URL made by fix_artwork_url. Not every image has an "original"
+// version (profile pictures often don't), so smaller versions are tried if it doesn't exist.
+static net::Response get_artwork(const std::string& url)
+{
+	net::Response r = get_timed(url);
+
+	constexpr std::string_view original = "-original.";
+	const size_t pos = url.find(original);
+
+	if (r.status_code != 404 || pos == std::string::npos)
+	{
+		return r;
+	}
+
+	for (const char* size : { "-t1080x1080.", "-t500x500.", "-large." })
+	{
+		std::string smaller = url;
+		smaller.replace(pos, original.size(), size);
+
+		r = get_timed(smaller);
+		if (r.status_code != 404)
+		{
+			break;
+		}
+	}
+
+	return r;
+}
+
+// Tracks without their own cover art show the uploader's profile picture on SoundCloud, which
+// is stored in user.avatar_url. Returns an empty string if there is neither.
+static std::string get_artwork_url(const Json& post_data)
+{
+	std::string url = post_data.value("artwork_url");
+
+	if (url.empty())
+	{
+		url = get_object(post_data, "user").value("avatar_url");
+	}
+
+	if (!url.empty())
+	{
+		fix_artwork_url(url);
+	}
+
+	return url;
 }
 
 std::string sanitize_filename(const std::string& name)
@@ -288,20 +362,20 @@ bool sc_upload::get_cover_art(net::Response& buffer) const
 			return false;
 		}
 
-		url = post_data.value("artwork_url");
-		if (url.empty())
-		{
-			return false;
-		}
-
-		fix_artwork_url(url);
+		url = get_artwork_url(post_data);
 	}
 	else
 	{
 		url = this->art_src;
 	}
 
-	buffer = get_timed(url);
+	if (url.empty())
+	{
+		err::warn("no cover art found, saving the track without one");
+		return false;
+	}
+
+	buffer = get_artwork(url);
 	if (cfg::f.cover_src_sc_link && request_failed(buffer))
 	{
 		return false;
@@ -512,9 +586,10 @@ bool sc_upload::parse_manifest(const std::string& raw_data, std::vector<std::sha
 
 bool sc_upload::get_streaming_url(void)
 {
-	// SoundCloud only serves AAC (as HLS) now. aac_96k is only used without aac_160k.
+	// SoundCloud only serves AAC (as HLS) now. aac_96k is only used without aac_160k. Some tracks
+	// only have encrypted streams ("cbc-encrypted-hls", "ctr-encrypted-hls"), which are skipped.
 
-	auto list = this->post_data.value("media", Json{});
+	auto list = get_object(this->post_data, "media");
 	if (list.empty())
 	{
 		err::log("'media' property not found in metadata");
@@ -528,29 +603,85 @@ bool sc_upload::get_streaming_url(void)
 		return false;
 	}
 
+	bool encrypted_only = false;
+
 	for (const char* preset : { "aac_160k", "aac_96k" })
 	{
 		for (const auto& transcoding : list)
 		{
-			if (transcoding["preset"] == preset)
+			if (transcoding["preset"] != preset)
 			{
-				if (std::string_view(preset) == "aac_96k")
-				{
-					err::warn("only a 96 kbps AAC stream is available for this track");
-				}
-
-				this->streaming_url = transcoding["url"].get<std::string>() + "?client_id=" + cfg::client_id;
-				return true;
+				continue;
 			}
+
+			if (get_object(transcoding, "format").value("protocol") != "hls")
+			{
+				encrypted_only = true;
+				continue;
+			}
+
+			if (std::string_view(preset) == "aac_96k")
+			{
+				err::warn("only a 96 kbps AAC stream is available for this track");
+			}
+
+			this->streaming_url = transcoding["url"].get<std::string>() + "?client_id=" + cfg::client_id;
+			return true;
 		}
 	}
 
-	err::log("failed to locate valid media transcoding");
+	if (encrypted_only)
+	{
+		err::log("this track is only available as an encrypted (DRM protected) stream and can't be downloaded");
+	}
+	else
+	{
+		err::log("failed to locate valid media transcoding");
+	}
+
 	return false;
+}
+
+// Asks whether to download a track again when its file already exists. Defaults to no, and
+// is always no when there is no terminal to ask (e.g. when sl is run from a script).
+static bool confirm_overwrite(const std::string& path, const std::string& name)
+{
+	if (!std::filesystem::exists(path))
+	{
+		return true;
+	}
+
+	err::warn("\"{}\" already exists in the download folder", name);
+
+	std::string answer;
+
+	if (isatty(STDIN_FILENO))
+	{
+		std::cout << "Download it again and replace it? [y/N] " << std::flush;
+		std::getline(std::cin, answer);
+	}
+
+	if (answer != "y" && answer != "Y")
+	{
+		std::cout << "not downloading it again\n";
+		return false;
+	}
+
+	return true;
 }
 
 bool sc_upload::download_track(void)
 {
+	const std::string& file_name = cfg::g_data.audio_name.empty() ? this->file_title : cfg::g_data.audio_name;
+	const std::string name = sanitize_filename(file_name) + ".m4a";
+	const std::string path = cfg::audio_dir + name;
+	const bool existed = std::filesystem::exists(path);
+
+	if (!confirm_overwrite(path, name))
+	{
+		return false;
+	}
+
 	// Downloading track
 
 	net::Response r = get_timed(this->streaming_url);
@@ -571,10 +702,6 @@ bool sc_upload::download_track(void)
 	}
 
 	// Writing track to disk
-
-	const std::string& file_name = cfg::g_data.audio_name.empty() ? this->file_title : cfg::g_data.audio_name;
-	const std::string name = sanitize_filename(file_name) + ".m4a";
-	const std::string path = cfg::audio_dir + name;
 
 	// The track is written, repaired and tagged under a hidden temporary name, then renamed into
 	// place. Music players that watch the folder (Spotify does) read a file as soon as it shows
@@ -622,7 +749,14 @@ bool sc_upload::download_track(void)
 	// Adding tag
 
 	// Must happen before tagging: the repair rewrites the file, the tags are added to the result
-	repair_fragmented_m4a(temp_path);
+
+	if (!repair_fragmented_m4a(temp_path, name))
+	{
+		err::log("the downloaded data for \"{}\" is not a valid audio file, nothing was saved", name);
+		std::filesystem::remove(temp_path, ec);
+		return false;
+	}
+
 	this->add_m4a_tag(temp_path);
 
 	std::filesystem::rename(temp_path, path, ec); // replaces an existing download of the track
@@ -634,6 +768,7 @@ bool sc_upload::download_track(void)
 		return false;
 	}
 
+	cfg::downloaded_files.push_back({ std::filesystem::absolute(path, ec).string(), existed });
 	return true;
 }
 
@@ -645,11 +780,22 @@ bool sc_upload::download_album(void)
 
 bool sc_upload::download_cover(void) const
 {
-	net::Response r = get_timed(this->artwork_url);
-	if (r.status_code != 200) return false;
+	if (this->artwork_url.empty())
+	{
+		err::log("no cover art found for this track");
+		return false;
+	}
+
+	net::Response r = get_artwork(this->artwork_url);
+	if (r.status_code != 200)
+	{
+		err::log_net(r);
+		return false;
+	}
 
 	const std::string& file_name = cfg::g_data.image_name.empty() ? this->file_title : cfg::g_data.image_name;
 	const std::string path = cfg::image_dir + sanitize_filename(file_name) + ".jpg";
+	const bool existed = std::filesystem::exists(path);
 
 	std::ofstream file(path, std::ios::binary | std::ios::trunc);
 	if (file.fail())
@@ -661,6 +807,8 @@ bool sc_upload::download_cover(void) const
 	file.write(r.text.data(), r.text.size());
 	file.close();
 
+	std::error_code ec;
+	cfg::downloaded_files.push_back({ std::filesystem::absolute(path, ec).string(), existed });
 	return true;
 }
 
@@ -837,11 +985,7 @@ void sc_upload::get_art_and_title(void)
 
 	// Getting artwork URL
 
-	this->artwork_url = post_data.value("artwork_url", post_data.value("avatar_url"));
-	if (!this->artwork_url.empty())
-	{
-		fix_artwork_url(this->artwork_url);
-	}
+	this->artwork_url = get_artwork_url(post_data);
 
 	// Getting embedded artwork source
 
@@ -855,14 +999,68 @@ void sc_upload::get_art_and_title(void)
 	}
 }
 
+static bool is_word_char(const char ch)
+{
+	const unsigned char c = static_cast<unsigned char>(ch);
+	return c >= 0x80 || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+// Applies the -replace list to an artist string. Only whole names are replaced, so with
+// "-replace jay j", "4jay x jay" becomes "4jay x j". Matching ignores case.
+static std::string replace_artist_names(std::string artist)
+{
+	for (const auto& [from, to] : cfg::artist_replacements)
+	{
+		std::string lower = cfg::lowercase(artist); // same byte positions as artist
+		size_t pos = 0;
+
+		while ((pos = lower.find(from, pos)) != std::string::npos)
+		{
+			const size_t end = pos + from.size();
+			const bool whole_name = (pos == 0 || !is_word_char(lower[pos - 1]))
+				&& (end == lower.size() || !is_word_char(lower[end]));
+
+			if (!whole_name)
+			{
+				++pos;
+				continue;
+			}
+
+			artist.replace(pos, from.size(), to);
+			lower.replace(pos, from.size(), cfg::lowercase(to));
+			pos += to.size();
+		}
+	}
+
+	return artist;
+}
+
+void sc_upload::replace_artist(void)
+{
+	// Runs after -parse so parsed artists are replaced too. An artist given with -artists is kept.
+
+	if (!cfg::g_data.contrib_artists.empty())
+	{
+		return;
+	}
+
+	const std::string replaced = replace_artist_names(this->artist);
+
+	if (replaced != this->artist)
+	{
+		std::cout << "replaced artist \"" << this->artist << "\" with \"" << replaced << "\"\n";
+		this->artist = replaced;
+	}
+}
+
 bool sc_upload::get_artist(void)
 {
 	if (cfg::g_data.contrib_artists.empty())
 	{
 		std::string mb_artist;
 
-		if ((mb_artist = post_data.value("publisher_metadata", Json{}).value("artist")).empty()
-			&& (mb_artist = post_data.value("user", Json{}).value("username")).empty())
+		if ((mb_artist = get_object(post_data, "publisher_metadata").value("artist")).empty()
+			&& (mb_artist = get_object(post_data, "user").value("username")).empty())
 		{
 			err::log("failed to get publisher_metadata.artist or user.username");
 			this->f.error_occured = true;
@@ -928,6 +1126,7 @@ sc_upload::sc_upload(std::string url)
 	}
 
 	this->get_art_and_title();
+	this->replace_artist();
 
 	if (cfg::cover_art_only()) 
 	{

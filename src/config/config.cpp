@@ -25,6 +25,7 @@ namespace cfg
 		std::cout << "-n-art     ; [SAVEABLE, DEFAULT] disables cover art downloads\n";
 		std::cout << "-pvars     ; shows how to add the program to PATH (asks before changing any file)\n";
 		std::cout << "-cid <cid> ; [SAVEABLE] sets the client ID (use only if you know what you're doing)\n";
+		std::cout << "-undo      ; lists your last 10 downloads and deletes the ones you pick (asks first)\n";
 		std::cout << "-xdg       ; stores cfg.json in ~/.config/soundload instead of the program directory (used automatically once it exists there)\n";
 		std::cout << "(-s) -save ; saves applicable arguments to cfg.json\n";
 
@@ -45,6 +46,8 @@ namespace cfg
 		std::cout << "(-n)  -num <track number> ; track number property of audio tag (defaults to track number in album if track is in an album)\n";
 		std::cout << "(-y)  -year <year>        ; year property of audio tag (defaults to year of upload date)\n";
 		std::cout << "(-p)  -parse              ; splits a track name like \"Artist - Song\" into artist + title (uses the first \" - \"; -title and -artists still win)\n";
+		std::cout << "-replace <from> <to>      ; [SAVEABLE] replaces an artist name in the artist tag, e.g. -replace 'wifiskeleton' 'skeleton' (ignores case, applied after -parse, -artists still wins)\n";
+		std::cout << "-n-replace <from>         ; [SAVEABLE] removes a saved -replace\n";
 	}
 
 	bool parse_arguments(int argc, const char* const argv[])
@@ -89,6 +92,28 @@ namespace cfg
 			const uint32_t arg_hash = hash_rt(&arg[1]);
 			bool handled = true;
 
+			// -replace is the only argument that takes two values
+
+			if (arg_hash == hash("replace"))
+			{
+				if (i + 2 >= argc)
+				{
+					err::log("-replace needs two values: the artist name to replace and what to replace it with");
+					return false;
+				}
+
+				const std::string from = cfg::lowercase(argv[i + 1]);
+				if (from.empty())
+				{
+					err::log("-replace: the artist name to replace can't be empty");
+					return false;
+				}
+
+				cfg::artist_replacements[from] = argv[i + 2];
+				i += 2;
+				continue;
+			}
+
 			switch (arg_hash)
 			{
 			case hash("s"):       { [[fallthrough]];                             }
@@ -99,6 +124,7 @@ namespace cfg
 			case hash("n-audio"): { cfg::f.no_audio_download = true; break; }
 			case hash("pvars"):   { cfg::f.add_to_path       = true; break; }
 			case hash("xdg"):            { cfg::f.use_xdg          = true; break; }
+			case hash("undo"):           { cfg::f.undo             = true; break; }
 			case hash("p"):              { [[fallthrough]]; }
 			case hash("parse"):          { cfg::f.parse_title      = true; break; }
 
@@ -171,6 +197,14 @@ namespace cfg
 
 				case hash("cid"):      { cfg::client_id              = next_arg; break; }
 
+				case hash("n-replace"):
+				{
+					const std::string from = cfg::lowercase(next_arg);
+					cfg::removed_replacements.push_back(from);
+					cfg::artist_replacements.erase(from);
+					break;
+				}
+
 					// Invalid arguments
 
 				default:
@@ -241,6 +275,18 @@ namespace cfg
 		{
 			cfg::f.seperate_art = true;
 		}
+
+		// Saved replacements are used unless the same name was given to -replace or -n-replace
+
+		for (const auto& [from, to] : data.artist_replacements)
+		{
+			const std::string key = cfg::lowercase(from);
+
+			if (std::ranges::find(cfg::removed_replacements, key) == cfg::removed_replacements.end())
+			{
+				cfg::artist_replacements.try_emplace(key, to);
+			}
+		}
 	}
 
 	void save_config(cfg_format& data)
@@ -269,6 +315,9 @@ namespace cfg
 		{
 			data.get_track_art = cfg::f.seperate_art;
 		}
+
+		// Already merged with the saved ones by read_config, with -n-replace names removed
+		data.artist_replacements = cfg::artist_replacements;
 	}
 
 	//
@@ -382,5 +431,260 @@ namespace cfg
 		}
 
 		std::cout << "[!] Added sl directory to PATH, restart your shell for it to take effect\n";
+	}
+
+	//
+	//// DOWNLOAD HISTORY (-undo)
+	//
+
+	constexpr size_t max_history = 10;
+
+	static std::filesystem::path history_path(void)
+	{
+		const char* const state_home = std::getenv("XDG_STATE_HOME");
+		const char* const home       = std::getenv("HOME");
+
+		std::filesystem::path dir;
+
+		if (state_home && *state_home && std::filesystem::path(state_home).is_absolute())
+		{
+			dir = std::filesystem::path(state_home) / "soundload";
+		}
+		else
+		{
+			dir = std::filesystem::path(home ? home : "") / ".local" / "state" / "soundload";
+		}
+
+		return dir / "history.json";
+	}
+
+	// Newest first. Files that no longer exist are left out, and so are entries with none left.
+	static std::vector<download_entry> load_history(void)
+	{
+		std::vector<download_entry> history;
+
+		std::ifstream file(history_path());
+		if (file.fail())
+		{
+			return history;
+		}
+
+		try
+		{
+			history = Json::parse(file).get<std::vector<download_entry>>();
+		}
+		catch (...)
+		{
+			err::warn("could not read the download history, starting a new one");
+			return {};
+		}
+
+		for (auto& entry : history)
+		{
+			std::erase_if(entry.files, [](const downloaded_file& f) { return !std::filesystem::exists(f.path); });
+		}
+
+		std::erase_if(history, [](const download_entry& entry) { return entry.files.empty(); });
+		return history;
+	}
+
+	static void save_history(const std::vector<download_entry>& history)
+	{
+		const std::filesystem::path path = history_path();
+
+		std::error_code ec;
+		std::filesystem::create_directories(path.parent_path(), ec);
+
+		std::ofstream file(path, std::ios::trunc);
+		file << Json(history).dump();
+
+		if (file.fail())
+		{
+			err::warn("could not save the download history to \"{}\"", path.string());
+		}
+	}
+
+	void record_download(void)
+	{
+		if (cfg::downloaded_files.empty())
+		{
+			return;
+		}
+
+		std::vector<download_entry> history = load_history();
+
+		// A song downloaded again is only listed under its newest download
+
+		for (auto& entry : history)
+		{
+			std::erase_if(entry.files, [](const downloaded_file& old)
+				{
+					return std::ranges::any_of(cfg::downloaded_files, [&old](const downloaded_file& f) { return f.path == old.path; });
+				});
+		}
+
+		std::erase_if(history, [](const download_entry& entry) { return entry.files.empty(); });
+
+		// The song is listed first, then its cover
+
+		download_entry entry{ cfg::downloaded_files };
+		std::ranges::stable_partition(entry.files, [](const downloaded_file& f) { return f.path.ends_with(".m4a"); });
+
+		history.insert(history.begin(), std::move(entry));
+
+		if (history.size() > max_history)
+		{
+			history.resize(max_history);
+		}
+
+		save_history(history);
+	}
+
+	// Parses "1", "1 3", "1-3", "2,4-5" into 0-based indices. Returns false on anything invalid.
+	static bool parse_selection(const std::string& input, const size_t count, std::vector<size_t>& out)
+	{
+		std::string text = input;
+		std::ranges::replace(text, ',', ' ');
+
+		std::istringstream iss(text);
+		std::string token;
+
+		auto to_number = [count](const std::string& str, size_t& number)
+			{
+				if (str.empty() || !std::ranges::all_of(str, [](const char c) { return c >= '0' && c <= '9'; }) || str.size() > 3)
+				{
+					return false;
+				}
+
+				number = std::stoul(str);
+				return number >= 1 && number <= count;
+			};
+
+		while (iss >> token)
+		{
+			const size_t dash = token.find('-');
+			size_t first = 0, last = 0;
+
+			if (dash == std::string::npos)
+			{
+				if (!to_number(token, first)) return false;
+				last = first;
+			}
+			else if (!to_number(token.substr(0, dash), first) || !to_number(token.substr(dash + 1), last) || first > last)
+			{
+				return false;
+			}
+
+			for (size_t i = first; i <= last; ++i)
+			{
+				if (std::ranges::find(out, i - 1) == out.end())
+				{
+					out.push_back(i - 1);
+				}
+			}
+		}
+
+		std::ranges::sort(out);
+		return !out.empty();
+	}
+
+	void undo_downloads(void)
+	{
+		std::vector<download_entry> history = load_history();
+
+		if (history.empty())
+		{
+			std::cout << "nothing to undo\n";
+			save_history(history); // drops entries whose files were deleted by hand
+			return;
+		}
+
+		auto file_name = [](const downloaded_file& f) { return std::filesystem::path(f.path).filename().string(); };
+
+		std::cout << "Last downloads (newest first):\n";
+
+		for (size_t i = 0; i < history.size(); ++i)
+		{
+			std::cout << "  " << std::setw(2) << (i + 1) << "  " << file_name(history[i].files[0]);
+
+			for (size_t j = 1; j < history[i].files.size(); ++j)
+			{
+				std::cout << "  + " << file_name(history[i].files[j]);
+			}
+
+			if (std::ranges::any_of(history[i].files, &downloaded_file::replaced))
+			{
+				std::cout << "  (replaced an older copy, can't be restored)";
+			}
+
+			std::cout << '\n';
+		}
+
+		if (!isatty(STDIN_FILENO))
+		{
+			std::cout << "not run from a terminal, nothing was deleted\n";
+			return;
+		}
+
+		std::cout << "Delete which? (e.g. 1, 1 3, 1-3, Enter to cancel): " << std::flush;
+
+		std::string answer;
+		std::getline(std::cin, answer);
+
+		if (answer.find_first_not_of(" \t") == std::string::npos)
+		{
+			std::cout << "cancelled\n";
+			return;
+		}
+
+		std::vector<size_t> picked;
+		if (!parse_selection(answer, history.size(), picked))
+		{
+			err::log("invalid selection \"{}\", use numbers from 1 to {} (e.g. 1, 1 3, 1-3)", answer, history.size());
+			return;
+		}
+
+		size_t file_count = 0;
+		for (const size_t i : picked) file_count += history[i].files.size();
+
+		std::cout << "Delete " << picked.size() << (picked.size() == 1 ? " download" : " downloads")
+			<< " (" << file_count << (file_count == 1 ? " file" : " files") << ")? [y/N] " << std::flush;
+
+		answer.clear();
+		std::getline(std::cin, answer);
+
+		if (answer != "y" && answer != "Y")
+		{
+			std::cout << "nothing was deleted\n";
+			return;
+		}
+
+		size_t deleted = 0;
+
+		for (const size_t i : picked)
+		{
+			for (const auto& f : history[i].files)
+			{
+				std::error_code ec;
+				std::filesystem::remove(f.path, ec);
+
+				if (ec)
+				{
+					err::warn("could not delete \"{}\": {}", f.path, ec.message());
+				}
+			}
+
+			++deleted;
+		}
+
+		// Deleted entries are removed from the history (picked is sorted, erase from the back)
+
+		for (auto it = picked.rbegin(); it != picked.rend(); ++it)
+		{
+			history.erase(history.begin() + static_cast<std::ptrdiff_t>(*it));
+		}
+
+		save_history(history);
+		std::cout << "deleted " << deleted << (deleted == 1 ? " download\n" : " downloads\n");
 	}
 }

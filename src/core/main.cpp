@@ -97,6 +97,12 @@ static bool init_program(int argc, char* argv[], cfg_format& raw_cfg)
 		return false;
 	}
 
+	if (cfg::f.undo)
+	{
+		cfg::undo_downloads();
+		return false;
+	}
+
 	const std::filesystem::path program_dir = cfg::path_cache;
 	cfg::path_cache = cfg::config_file_path();
 
@@ -146,7 +152,11 @@ int main(int argc, char* argv[])
 	fix_path(cfg::image_dir);
 
 	sc_upload post(argv[1]);
-	if (post.f.error_occured || !post.download())
+	const bool downloaded = !post.f.error_occured && post.download();
+
+	cfg::record_download(); // also when a later step failed, so files that were written can be undone
+
+	if (!downloaded)
 	{
 		return 1;
 	}

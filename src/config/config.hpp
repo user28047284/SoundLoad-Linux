@@ -9,11 +9,29 @@ struct cfg_format
 	std::string track_out_dir;
 	bool get_track_audio     = true;
 	bool get_track_art       = false;
+	std::map<std::string, std::string> artist_replacements; // set with -replace
 };
 
 // Missing keys keep their default values and unknown keys (such as the removed AAC options)
 // are ignored, so config files from older versions still load
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(cfg_format, cid, art_out_dir, track_out_dir, get_track_audio, get_track_art)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(cfg_format, cid, art_out_dir, track_out_dir, get_track_audio, get_track_art, artist_replacements)
+
+// One file written by a download, recorded for -undo
+struct downloaded_file
+{
+	std::string path;          // absolute
+	bool        replaced = false; // an earlier copy existed and was overwritten
+};
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(downloaded_file, path, replaced)
+
+// All files written by one run of sl (the song and, with -art, its cover)
+struct download_entry
+{
+	std::vector<downloaded_file> files;
+};
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(download_entry, files)
 
 // CONFIG DATA
 
@@ -25,7 +43,7 @@ namespace cfg
 
 	struct cfg_flags_t
 	{
-		// 13/16 bits used
+		// 14/16 bits used
 
 		uint16_t add_to_path       : 1; // Adds program to PATH variables
 		uint16_t save_cfg          : 1; // Saves applicable arguments to config (set when -save is used)
@@ -40,6 +58,7 @@ namespace cfg
 		uint16_t fresh_cfg         : 1; // cfg.json was just created
 		uint16_t use_xdg           : 1; // Stores cfg.json in the XDG config directory
 		uint16_t parse_title       : 1; // Splits "Artist - Title" track names into artist + title (not saveable)
+		uint16_t undo              : 1; // Lists recent downloads and deletes the ones picked
 	} inline f = {};
 
 	struct track_data_t
@@ -70,6 +89,13 @@ namespace cfg
 
 	inline std::filesystem::path path_cache; // Stores the directory of sl or the path of cfg.json
 
+	// Artist names to replace in the artist tag (-replace, saveable). Keys are lowercase, matching
+	// ignores case. removed_replacements holds names given to -n-replace.
+	inline std::map<std::string, std::string> artist_replacements;
+	inline std::vector<std::string>           removed_replacements;
+
+	inline std::vector<downloaded_file> downloaded_files; // files written by this run, for -undo
+
 	//
 	//// FORWARD DECLARATIONS
 	//
@@ -85,6 +111,12 @@ namespace cfg
 
 	void add_to_path(const std::filesystem::path& program_dir);
 
+	// Adds downloaded_files to the -undo history (the last 10 downloads)
+	void record_download(void);
+
+	// -undo: lists the last downloads and deletes the ones the user picks
+	void undo_downloads(void);
+
 	//
 	//// HELPERS
 	//
@@ -97,6 +129,17 @@ namespace cfg
 	inline bool art_flags_set(void)
 	{
 		return cfg::f.seperate_art || cfg::f.no_seperate_art;
+	}
+
+	// Lowercases ASCII letters only, so the byte length (and UTF-8) is unchanged
+	inline std::string lowercase(std::string text)
+	{
+		for (char& ch : text)
+		{
+			if (ch >= 'A' && ch <= 'Z') ch += 32;
+		}
+
+		return text;
 	}
 
 	inline bool cover_art_only(void)

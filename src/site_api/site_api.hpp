@@ -64,6 +64,8 @@ private:
 
 	bool get_artist(void);
 
+	void replace_artist(void);
+
 	bool get_resolution_data(void);
 
 public:
