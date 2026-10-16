@@ -180,44 +180,45 @@ namespace history
 
 		if (entries.empty())
 		{
-			std::cout << "nothing to undo\n";
+			std::cout << "Nothing to undo.\n";
 			store(entries); // drops entries whose files were deleted by hand
 			return;
 		}
 
 		auto file_name = [](const downloaded_file& f) { return util::to_utf8(util::to_path(f.path).filename()); };
 
-		std::cout << "Last downloads (newest first):\n";
+		std::cout << "Recent downloads (newest first):\n\n";
 
 		for (size_t i = 0; i < entries.size(); ++i)
 		{
 			const auto& files = entries[i].files;
-			std::cout << "  " << std::setw(2) << (i + 1) << "  " << file_name(files[0]);
+			std::cout << "  " << std::setw(2) << (i + 1) << "  " << file_name(files[0]) << '\n';
 
+			// Extra files and notes line up under the first file name
 			for (size_t j = 1; j < files.size(); ++j)
 			{
-				std::cout << "  + " << file_name(files[j]);
+				std::cout << "      + " << file_name(files[j]) << '\n';
 			}
 
 			if (std::ranges::any_of(files, &downloaded_file::replaced))
 			{
-				std::cout << "  (replaced an older copy, can't be restored)";
+				std::cout << "      (replaced an older copy, which can't be restored)\n";
 			}
-
-			std::cout << '\n';
 		}
+
+		std::cout << '\n';
 
 		if (!platform::stdin_is_terminal())
 		{
-			std::cout << "not run from a terminal, nothing was deleted\n";
+			std::cout << "Not run from a terminal, nothing was deleted.\n";
 			return;
 		}
 
-		const std::string answer = util::ask("Delete which? (e.g. 1, 1 3, 1-3, Enter to cancel): ");
+		const std::string answer = util::ask("Delete which? e.g. 1, 1 3 or 1-3 (Enter to cancel): ");
 
 		if (answer.find_first_not_of(" \t") == std::string::npos)
 		{
-			std::cout << "cancelled\n";
+			std::cout << "Cancelled.\n";
 			return;
 		}
 
@@ -233,7 +234,7 @@ namespace history
 
 		if (!util::ask_yes_no(std::format("Delete {} ({})?", plural(picked.size(), "download"), plural(file_count, "file"))))
 		{
-			std::cout << "nothing was deleted\n";
+			std::cout << "Nothing was deleted.\n";
 			return;
 		}
 
@@ -259,6 +260,6 @@ namespace history
 		}
 
 		store(entries);
-		std::cout << "deleted " << plural(picked.size(), "download") << '\n';
+		std::cout << "Deleted " << plural(picked.size(), "download") << ".\n";
 	}
 }

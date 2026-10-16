@@ -24,6 +24,9 @@ namespace platform
 	// True if stdin is a terminal, i.e. there is someone to ask
 	bool stdin_is_terminal(void);
 
+	// Shows the prompt and reads a line from the terminal. False if Esc was pressed or input ended.
+	bool read_line_or_escape(std::string_view prompt, std::string& line);
+
 	enum class run_result
 	{
 		ok,

@@ -11,6 +11,7 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include <conio.h>
 #include <io.h>
 #include <cstdio>
 #include <memory>
@@ -123,6 +124,50 @@ namespace platform
 	bool stdin_is_terminal(void)
 	{
 		return _isatty(_fileno(stdin));
+	}
+
+	bool read_line_or_escape(const std::string_view prompt, std::string& line)
+	{
+		std::cout << prompt << std::flush;
+
+		std::wstring text;
+
+		while (true)
+		{
+			const wint_t ch = _getwch();
+
+			if (ch == 27 || ch == 3) // Esc, Ctrl+C
+			{
+				std::cout << '\n';
+				return false;
+			}
+
+			if (ch == L'\r')
+			{
+				std::cout << '\n';
+				line = narrow(text);
+				return true;
+			}
+
+			if (ch == 0 || ch == 0xE0) // function and arrow keys send a second code
+			{
+				_getwch();
+			}
+			else if (ch == L'\b')
+			{
+				for (bool again = true; again && !text.empty();)
+				{
+					again = text.back() >= 0xDC00 && text.back() <= 0xDFFF; // second half of a surrogate pair
+					text.pop_back();
+					_putwch(L'\b'); _putwch(L' '); _putwch(L'\b');
+				}
+			}
+			else if (ch >= 32)
+			{
+				text += static_cast<wchar_t>(ch);
+				_putwch(static_cast<wchar_t>(ch));
+			}
+		}
 	}
 
 	// Quotes an argument for the Microsoft C runtime (backslashes only matter before a quote)
