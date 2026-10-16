@@ -1,5 +1,5 @@
 # SoundLoad
-[![Stable release](https://img.shields.io/github/v/release/user28047284/SoundLoad-Linux?filter=v*&label=stable%20release)](https://github.com/user28047284/SoundLoad-Linux/releases)
+[![Stable release](https://img.shields.io/github/v/release/user28047284/SoundLoad-Linux?filter=v*&label=stable%20release)](https://github.com/user28047284/SoundLoad-Linux/releases/tag/v2.0.0)
 
 `sl` downloads SoundCloud tracks on Linux and Windows with as much of their data as possible: the audio, the cover art
 in its highest available resolution, and tags for title, artist, album, genre, year and a comment
