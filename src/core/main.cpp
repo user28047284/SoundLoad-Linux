@@ -2,6 +2,7 @@
 #include "logs.hpp"
 #include "../config/config.hpp"
 #include "../history/history.hpp"
+#include "../platform/platform.hpp"
 #include "../site_api/site_api.hpp"
 
 // Some distributions build TagLib with debug output enabled, which prints messages such as
@@ -11,9 +12,9 @@ struct silent_taglib_listener : TagLib::DebugListener
 	void printMessage(const TagLib::String&) override {}
 };
 
-static int run(const int argc, const char* const argv[])
+static int run(const std::vector<std::string>& args)
 {
-	if (!cfg::parse_arguments(argc, argv))
+	if (!cfg::parse_arguments(args))
 	{
 		return 1;
 	}
@@ -80,11 +81,12 @@ int main(int argc, char* argv[])
 	static silent_taglib_listener taglib_listener;
 	TagLib::setDebugListener(&taglib_listener);
 
+	platform::init_console();
 	const net::global_init curl_init;
 
 	try
 	{
-		return run(argc, argv);
+		return run(platform::utf8_arguments(argc, argv));
 	}
 	catch (const std::exception& e)
 	{

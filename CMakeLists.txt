@@ -6,18 +6,30 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(NOT CMAKE_BUILD_TYPE)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+# With vcpkg's static triplets (Windows), also link the C runtime statically: one self-contained sl.exe
+if(VCPKG_TARGET_TRIPLET MATCHES "-static$")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 # Dependencies
 
 find_package(CURL REQUIRED)
-
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(TAGLIB REQUIRED IMPORTED_TARGET taglib>=2.0)
-
 find_package(Threads REQUIRED)
+
+# TagLib 2.x installs a CMake package (TagLib::tag), pkg-config is the fallback
+find_package(taglib 2.0 CONFIG QUIET)
+
+if(TARGET TagLib::tag)
+    set(SL_TAGLIB TagLib::tag)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(TAGLIB REQUIRED IMPORTED_TARGET taglib>=2.0)
+    set(SL_TAGLIB PkgConfig::TAGLIB)
+endif()
 
 # Executable
 
@@ -31,13 +43,24 @@ add_executable(sl
     src/site_api/site_api.cpp
 )
 
+if(WIN32)
+    target_sources(sl PRIVATE src/platform/platform_windows.cpp)
+    target_link_libraries(sl PRIVATE shell32 advapi32 user32)
+else()
+    target_sources(sl PRIVATE src/platform/platform_linux.cpp)
+endif()
+
 target_include_directories(sl PRIVATE src/core)
 target_include_directories(sl SYSTEM PRIVATE includes) # vendored (modified) nlohmann json
 
-target_link_libraries(sl PRIVATE CURL::libcurl PkgConfig::TAGLIB Threads::Threads)
+target_link_libraries(sl PRIVATE CURL::libcurl ${SL_TAGLIB} Threads::Threads)
 
 target_precompile_headers(sl PRIVATE src/core/pch.hpp)
 
-target_compile_options(sl PRIVATE -Wall -Wextra -Wpedantic)
+if(MSVC)
+    target_compile_options(sl PRIVATE /W4 /utf-8 /permissive-)
+else()
+    target_compile_options(sl PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 install(TARGETS sl RUNTIME DESTINATION bin)

@@ -66,7 +66,8 @@ namespace cfg
 	//// FUNCTIONS
 	//
 
-	bool parse_arguments(int argc, const char* const argv[]);
+	// args[0] is the program, all strings are UTF-8
+	bool parse_arguments(const std::vector<std::string>& args);
 
 	void show_usage(void);
 

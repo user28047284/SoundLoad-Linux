@@ -2,6 +2,7 @@
 #include "logs.hpp"
 #include "util.hpp"
 #include "history.hpp"
+#include "../platform/platform.hpp"
 
 struct downloaded_file
 {
@@ -29,7 +30,7 @@ namespace history
 
 	static fs::path file_path(void)
 	{
-		const fs::path dir = util::xdg_dir("XDG_STATE_HOME", ".local/state");
+		const fs::path dir = platform::state_dir();
 		return dir.empty() ? fs::path{} : dir / "history.json";
 	}
 
@@ -56,7 +57,7 @@ namespace history
 
 		for (auto& entry : entries)
 		{
-			std::erase_if(entry.files, [](const downloaded_file& f) { return !fs::exists(f.path); });
+			std::erase_if(entry.files, [](const downloaded_file& f) { return !fs::exists(util::to_path(f.path)); });
 		}
 
 		std::erase_if(entries, [](const download_entry& entry) { return entry.files.empty(); });
@@ -79,14 +80,14 @@ namespace history
 
 		if (file.fail())
 		{
-			err::warn("could not save the download history to \"{}\"", path.string());
+			err::warn("could not save the download history to \"{}\"", util::to_utf8(path));
 		}
 	}
 
 	void add(const std::string& path, const bool replaced)
 	{
 		std::error_code ec;
-		this_run.push_back({ fs::absolute(path, ec).string(), replaced });
+		this_run.push_back({ util::to_utf8(fs::absolute(util::to_path(path), ec)), replaced });
 	}
 
 	void save(void)
@@ -184,7 +185,7 @@ namespace history
 			return;
 		}
 
-		auto file_name = [](const downloaded_file& f) { return fs::path(f.path).filename().string(); };
+		auto file_name = [](const downloaded_file& f) { return util::to_utf8(util::to_path(f.path).filename()); };
 
 		std::cout << "Last downloads (newest first):\n";
 
@@ -206,7 +207,7 @@ namespace history
 			std::cout << '\n';
 		}
 
-		if (!util::interactive())
+		if (!platform::stdin_is_terminal())
 		{
 			std::cout << "not run from a terminal, nothing was deleted\n";
 			return;
@@ -241,7 +242,7 @@ namespace history
 			for (const auto& f : entries[i].files)
 			{
 				std::error_code ec;
-				fs::remove(f.path, ec);
+				fs::remove(util::to_path(f.path), ec);
 
 				if (ec)
 				{

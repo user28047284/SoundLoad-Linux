@@ -2,8 +2,7 @@
 #include "logs.hpp"
 #include "util.hpp"
 #include "config.hpp"
-
-#include <strings.h>
+#include "../platform/platform.hpp"
 
 namespace cfg
 {
@@ -56,17 +55,14 @@ namespace cfg
 
 	static bool matches(const std::string_view name, const char* arg_name, const char* alias)
 	{
-		auto equals = [name](const char* candidate)
-			{
-				return *candidate && std::strlen(candidate) == name.size() && strncasecmp(candidate, name.data(), name.size()) == 0;
-			};
+		auto equals = [name](const char* candidate) { return *candidate && util::iequals(name, candidate); };
 
 		return equals(arg_name) || equals(alias);
 	}
 
 	void show_usage(void)
 	{
-		std::cout <<
+		std::cout << std::format(
 R"([*] SoundLoad (sl) - downloads SoundCloud tracks with their metadata and cover art
 Usage: sl <track link> [options]   download a track
        sl [options]                only change saved settings (with -s)
@@ -81,7 +77,7 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
   -cid <id>               [S] SoundCloud client ID (normally found automatically)
   -undo                   list your last 10 downloads and delete the ones you pick
   -pvars                  show how to add sl to PATH (asks before changing anything)
-  -xdg                    keep cfg.json in ~/.config/soundload instead of next to sl
+  -xdg                    keep cfg.json in {} instead of next to sl
   -?                      show this help
 
 [+] FILES
@@ -103,30 +99,32 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
   -p, -parse                  split "Artist - Title" track names into artist and title
   -replace <from> <to>        [S] replace an artist name in the artist tag (whole names, ignores case)
   -n-replace <from>           [S] remove a saved -replace
-)";
+)", platform::config_dir_hint());
 	}
 
-	bool parse_arguments(const int argc, const char* const argv[])
+	bool parse_arguments(const std::vector<std::string>& args)
 	{
+		const size_t argc = args.size();
+
 		if (argc < 2)
 		{
 			err::log("no arguments given, use '-?' for program usage");
 			return false;
 		}
 
-		int i = 1;
+		size_t i = 1;
 
-		if (strncasecmp(argv[1], "https://soundcloud.com/", 23) == 0)
+		if (util::istarts_with(args[1], "https://soundcloud.com/"))
 		{
-			link = argv[1];
+			link = args[1];
 			i = 2;
 		}
 
 		for (; i < argc; ++i)
 		{
-			const std::string_view arg = argv[i];
+			const std::string_view arg = args[i];
 
-			auto has_values = [&](const int count)
+			auto has_values = [&](const size_t count)
 				{
 					if (i + count < argc) return true;
 
@@ -161,7 +159,7 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
 				it != std::end(value_args))
 			{
 				if (!has_values(1)) return false;
-				*it->target = argv[++i];
+				*it->target = args[++i];
 				continue;
 			}
 
@@ -169,14 +167,14 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
 			{
 				if (!has_values(2)) return false;
 
-				const std::string from = util::lowercase(argv[i + 1]);
+				const std::string from = util::lowercase(args[i + 1]);
 				if (from.empty())
 				{
 					err::log("-replace: the artist name to replace can't be empty");
 					return false;
 				}
 
-				artist_replacements[from] = argv[i + 2];
+				artist_replacements[from] = args[i + 2];
 				i += 2;
 				continue;
 			}
@@ -185,7 +183,7 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
 			{
 				if (!has_values(1)) return false;
 
-				const std::string from = util::lowercase(argv[++i]);
+				const std::string from = util::lowercase(args[++i]);
 				removed_replacements.push_back(from);
 				artist_replacements.erase(from);
 				continue;
@@ -199,16 +197,15 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
 
 		if (!image_src.empty())
 		{
-			f.cover_src_path    = fs::exists(image_src);
+			f.cover_src_path    = fs::exists(util::to_path(image_src));
 			f.cover_src_sc_link = !f.cover_src_path && image_src.starts_with("https://soundcloud.com/");
 		}
 
-		std::error_code ec;
-		program_dir = fs::read_symlink("/proc/self/exe", ec).parent_path();
+		program_dir = platform::executable_dir();
 
-		if (ec)
+		if (program_dir.empty())
 		{
-			err::log("failed to get sl path ({})", ec.message());
+			err::log("failed to get the folder sl is in");
 			return false;
 		}
 
@@ -222,7 +219,7 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
 	// cfg.json next to sl, or in the XDG config directory with -xdg or if it already exists there
 	static fs::path config_file_path(void)
 	{
-		const fs::path dir = util::xdg_dir("XDG_CONFIG_HOME", ".config");
+		const fs::path dir = platform::config_dir();
 
 		if (!dir.empty())
 		{
@@ -262,7 +259,7 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
 			}
 			catch (...)
 			{
-				err::log("failed to read \"{}\"", config_path.string());
+				err::log("failed to read \"{}\"", util::to_utf8(config_path));
 				return false;
 			}
 
@@ -329,75 +326,15 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
 
 		if (file.fail())
 		{
-			err::log("failed to save \"{}\"", config_path.string());
+			err::log("failed to save \"{}\"", util::to_utf8(config_path));
 			return false;
 		}
 
 		return true;
 	}
 
-	//
-	//// PATH
-	//
-
 	void add_to_path(void)
 	{
-		const std::string dir = program_dir.string();
-
-		// Already in PATH?
-
-		std::string_view list = std::getenv("PATH") ? std::getenv("PATH") : "";
-
-		while (true)
-		{
-			const size_t pos = list.find(':');
-			const std::string_view entry = list.substr(0, pos);
-
-			if (entry == dir || entry == dir + '/')
-			{
-				return;
-			}
-
-			if (pos == std::string_view::npos) break;
-			list.remove_prefix(pos + 1);
-		}
-
-		// The line and profile for the user's shell
-
-		const char* const shell_env = std::getenv("SHELL");
-		const char* const home_env  = std::getenv("HOME");
-		const std::string shell     = shell_env ? fs::path(shell_env).filename().string() : "";
-		const fs::path    home      = home_env ? home_env : "";
-
-		std::string line    = "export PATH='" + dir + "':\"$PATH\"";
-		fs::path    profile = home / ".bashrc";
-
-		if (shell == "fish")
-		{
-			line    = "fish_add_path '" + dir + "'";
-			profile = home / ".config/fish/config.fish";
-		}
-		else if (shell == "zsh")
-		{
-			profile = home / ".zshrc";
-		}
-
-		std::cout << "[*] To use sl from any directory, add this line to " << profile.string() << ":\n    " << line << '\n';
-
-		if (!home_env || !util::ask_yes_no("Add it now?"))
-		{
-			return;
-		}
-
-		std::ofstream file(profile, std::ios::app);
-		file << '\n' << line << '\n';
-
-		if (file.fail())
-		{
-			err::warn("failed to write to {}", profile.string());
-			return;
-		}
-
-		std::cout << "[!] Added sl directory to PATH, restart your shell for it to take effect\n";
+		platform::add_to_path(program_dir);
 	}
 }

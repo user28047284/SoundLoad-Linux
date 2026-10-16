@@ -176,7 +176,7 @@ std::optional<TagLib::ByteVector> sc_upload::get_cover_art(void) const
 {
 	if (cfg::f.cover_src_path)
 	{
-		std::ifstream file(cfg::image_src, std::ios::binary);
+		std::ifstream file(util::to_path(cfg::image_src), std::ios::binary);
 		const std::string data{ std::istreambuf_iterator<char>(file), {} };
 
 		if (file.bad() || data.empty())
@@ -695,7 +695,8 @@ void sc_upload::write_tags(const std::string& path, const std::string& name) con
 
 	auto utf8 = [](const std::string& text) { return TagLib::String(text, TagLib::String::UTF8); };
 
-	TagLib::MP4::File file(path.c_str());
+	const fs::path file_path = util::to_path(path); // TagLib may keep the pointer to its name
+	TagLib::MP4::File file(file_path.c_str());
 	TagLib::MP4::Tag* const tag = file.tag();
 
 	if (!file.isValid() || !tag)
@@ -740,7 +741,7 @@ bool sc_upload::download_track(void)
 {
 	const std::string name = util::sanitize_filename(cfg::overrides.audio_name.empty() ? this->file_title : cfg::overrides.audio_name) + ".m4a";
 	const std::string path = cfg::audio_dir + name;
-	const bool existed = fs::exists(path);
+	const bool existed = fs::exists(util::to_path(path));
 
 	if (existed && !confirm_overwrite(name))
 	{
@@ -760,10 +761,10 @@ bool sc_upload::download_track(void)
 	const std::string temp_path = cfg::audio_dir + "." + name + ".part";
 	std::error_code ec;
 
-	auto discard = [&temp_path, &ec](void) { fs::remove(temp_path, ec); return false; };
+	auto discard = [&temp_path, &ec](void) { fs::remove(util::to_path(temp_path), ec); return false; };
 
 	{
-		std::ofstream file(temp_path, std::ios::binary | std::ios::trunc);
+		std::ofstream file(util::to_path(temp_path), std::ios::binary | std::ios::trunc);
 		file.write(audio.data(), static_cast<std::streamsize>(audio.size()));
 
 		if (file.fail())
@@ -795,7 +796,7 @@ bool sc_upload::download_track(void)
 
 	this->write_tags(temp_path, name);
 
-	fs::rename(temp_path, path, ec); // replaces an existing download of the track
+	fs::rename(util::to_path(temp_path), util::to_path(path), ec); // replaces an existing download of the track
 
 	if (ec)
 	{
@@ -824,9 +825,9 @@ bool sc_upload::download_cover(void) const
 
 	const std::string name = util::sanitize_filename(cfg::overrides.image_name.empty() ? this->file_title : cfg::overrides.image_name) + ".jpg";
 	const std::string path = cfg::image_dir + name;
-	const bool existed = fs::exists(path);
+	const bool existed = fs::exists(util::to_path(path));
 
-	std::ofstream file(path, std::ios::binary | std::ios::trunc);
+	std::ofstream file(util::to_path(path), std::ios::binary | std::ios::trunc);
 	file.write(r.text.data(), static_cast<std::streamsize>(r.text.size()));
 
 	if (file.fail())
