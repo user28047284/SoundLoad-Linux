@@ -1,0 +1,184 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux x86_64
+    # Ubuntu 24.04 ships GCC 13 (needed for std::format). The binary needs glibc 2.39+.
+    runs-on: ubuntu-24.04
+    env:
+      TAGLIB_VERSION: "2.3.2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        # libstdc++ is linked statically later, so the binary doesn't depend on its version
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-13 ninja-build libcurl4-openssl-dev
+
+      - name: Cache TagLib
+        id: taglib-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/taglib
+          key: taglib-${{ env.TAGLIB_VERSION }}-ubuntu-24.04-gcc13
+
+      - name: Build TagLib
+        # Ubuntu only packages TagLib 1.x, so 2.x is built from source and linked statically
+        if: steps.taglib-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL "https://github.com/taglib/taglib/releases/download/v${TAGLIB_VERSION}/taglib-${TAGLIB_VERSION}.tar.gz" | tar xz
+          cmake -S "taglib-${TAGLIB_VERSION}" -B taglib-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 \
+            -DBUILD_SHARED_LIBS=OFF -DWITH_ZLIB=OFF \
+            -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BINDINGS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$HOME/taglib"
+          cmake --build taglib-build
+          cmake --install taglib-build
+
+      - name: Build sl
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*)      VERSION="${GITHUB_REF_NAME#v}" ;;
+            refs/heads/master) VERSION=nightly ;;
+            *)                 VERSION=dev ;;
+          esac
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 \
+            -DCMAKE_PREFIX_PATH="$HOME/taglib" -DSL_VERSION="$VERSION" \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+          cmake --build build
+
+      - name: Smoke test
+        run: |
+          ./build/sl '-?'
+          ./build/sl -version
+          ldd build/sl
+
+      - name: Package
+        run: |
+          mkdir sl-linux-x86_64
+          cp build/sl README.md SPOTIFY.md LICENSE.txt sl-linux-x86_64/
+          tar czf sl-linux-x86_64.tar.gz sl-linux-x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sl-linux-x86_64
+          path: sl-linux-x86_64.tar.gz
+
+  windows:
+    name: Windows x86_64
+    runs-on: windows-2022
+    env:
+      VCPKG_VERSION: "2026.07.29" # keep in sync with builtin-baseline in vcpkg.json
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-cache,readwrite"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-${{ env.VCPKG_VERSION }}-x64-windows-static-${{ hashFiles('vcpkg.json') }}
+
+      - name: Set up vcpkg
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:VCPKG_VERSION https://github.com/microsoft/vcpkg $env:VCPKG_ROOT
+          & "$env:VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics
+          New-Item -ItemType Directory -Force vcpkg-cache | Out-Null
+
+      - name: Build sl
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF -like 'refs/tags/v*') { $env:GITHUB_REF_NAME.Substring(1) }
+                     elseif ($env:GITHUB_REF -eq 'refs/heads/master') { 'nightly' } else { 'dev' }
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static -DSL_VERSION="$version"
+          cmake --build build --config Release
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          & .\build\Release\sl.exe '-?'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\build\Release\sl.exe -version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory sl-windows-x86_64 | Out-Null
+          Copy-Item build\Release\sl.exe, README.md, SPOTIFY.md, LICENSE.txt sl-windows-x86_64
+          Compress-Archive -Path sl-windows-x86_64 -DestinationPath sl-windows-x86_64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sl-windows-x86_64
+          path: sl-windows-x86_64.zip
+
+  release:
+    name: Publish release
+    needs: [linux, windows]
+    # Pushes to master replace the "nightly" release, which is always the repository's Latest release.
+    # v* tags create numbered (stable) releases, which the README links to.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish numbered release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # Never marked Latest, that stays the nightly. Tags like v1.2.0-rc1 become pre-releases.
+          PRERELEASE=""
+          case "$GITHUB_REF_NAME" in *-*) PRERELEASE="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --latest=false \
+            --title "$GITHUB_REF_NAME" $PRERELEASE
+
+      - uses: actions/checkout@v4
+        if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+        with:
+          ref: master
+
+      - name: Link the stable release in the README
+        # A push made with GITHUB_TOKEN doesn't start another workflow run
+        if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+        run: |
+          sed -i -E "/Stable release/ s#\]\(https://github.com/[^)]*\)\$#](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME})#" README.md
+          if git diff --quiet README.md; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "README: link the stable release ${GITHUB_REF_NAME}"
+          git pull --rebase origin master
+          git push origin HEAD:master
+
+      - name: Publish nightly
+        if: github.ref == 'refs/heads/master'
+        run: |
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly dist/* --latest --target "$GITHUB_SHA" \
+            --title "Nightly (${GITHUB_SHA::7})" \
+            --notes "Automatic build of the latest commit on master (${GITHUB_SHA}). If something is broken, the stable release is linked at the top of the README."

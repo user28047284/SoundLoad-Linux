@@ -33,6 +33,7 @@ namespace cfg
 		bool parse_title       = false; // -p: split "Artist - Title" track names
 		bool undo              = false; // -undo
 		bool show_help         = false; // -?
+		bool show_version      = false; // -version
 		bool cover_src_path    = false; // -isrc is an image file
 		bool cover_src_sc_link = false; // -isrc is a SoundCloud link (its cover art is used)
 		bool fresh_cfg         = false; // there was no cfg.json yet

@@ -291,7 +291,13 @@ namespace platform
 			std::cout << "    Your current user PATH (keep a copy to undo the change):\n    " << narrow(user_path) << '\n';
 		}
 
-		if (!util::ask_yes_no("Add it now?"))
+		// Asked with a dialog like the original Windows SoundLoad, but only when someone is there to
+		// answer it: in a script a dialog would wait forever
+
+		const std::wstring question = L"Add sl's folder to your PATH?\n\n" + dir +
+			L"\n\nThen you can run sl from any folder in a new terminal.";
+
+		if (!stdin_is_terminal() || MessageBoxW(nullptr, question.c_str(), L"SoundLoad", MB_YESNO | MB_ICONQUESTION) != IDYES)
 		{
 			return;
 		}
@@ -316,5 +322,18 @@ namespace platform
 		SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, reinterpret_cast<LPARAM>(L"Environment"), SMTO_ABORTIFHUNG, 5000, nullptr);
 
 		std::cout << "[!] Added sl's folder to PATH, open a new terminal for it to take effect\n";
+	}
+
+	void pause_if_double_clicked(void)
+	{
+		// A console started by Explorer belongs to sl alone, one started by cmd or PowerShell is shared
+
+		DWORD process_ids[2];
+
+		if (GetConsoleProcessList(process_ids, 2) == 1)
+		{
+			std::cout << "\nPress Enter to close this window..." << std::flush;
+			std::getchar();
+		}
 	}
 }

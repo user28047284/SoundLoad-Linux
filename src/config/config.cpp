@@ -33,6 +33,7 @@ namespace cfg
 		{ "xdg",     "",  &f.use_xdg           },
 		{ "undo",    "",  &f.undo              },
 		{ "parse",   "p", &f.parse_title       },
+		{ "version", "",  &f.show_version      },
 	};
 
 	static const value_arg value_args[] =
@@ -78,6 +79,7 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
   -undo                   list your last 10 downloads and delete the ones you pick
   -pvars                  show how to add sl to PATH (asks before changing anything)
   -xdg                    keep cfg.json in {} instead of next to sl
+  -version                show the version
   -?                      show this help
 
 [+] FILES

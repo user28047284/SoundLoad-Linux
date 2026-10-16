@@ -153,4 +153,8 @@ namespace platform
 
 		std::cout << "[!] Added sl directory to PATH, restart your shell for it to take effect\n";
 	}
+
+	void pause_if_double_clicked(void)
+	{
+	}
 }

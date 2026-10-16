@@ -4,6 +4,7 @@
 #include "../history/history.hpp"
 #include "../platform/platform.hpp"
 #include "../site_api/site_api.hpp"
+#include "version.hpp"
 
 // Some distributions build TagLib with debug output enabled, which prints messages such as
 // "TagLib: Frame::checkEncoding() -- Rendering using UTF8." for every non-Latin-1 tag
@@ -22,6 +23,14 @@ static int run(const std::vector<std::string>& args)
 	if (cfg::f.show_help)
 	{
 		cfg::show_usage();
+		return 0;
+	}
+
+	if (cfg::f.show_version)
+	{
+		std::cout << "sl " << sl_version;
+		if (!sl_commit.empty()) std::cout << " (" << sl_commit << ')';
+		std::cout << '\n';
 		return 0;
 	}
 
@@ -84,14 +93,18 @@ int main(int argc, char* argv[])
 	platform::init_console();
 	const net::global_init curl_init;
 
+	int exit_code = 1;
+
 	try
 	{
-		return run(platform::utf8_arguments(argc, argv));
+		exit_code = run(platform::utf8_arguments(argc, argv));
 	}
 	catch (const std::exception& e)
 	{
 		history::save();
 		err::log("unexpected error: {}", e.what());
-		return 1;
 	}
+
+	platform::pause_if_double_clicked();
+	return exit_code;
 }

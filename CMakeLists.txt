@@ -31,6 +31,23 @@ else()
     set(SL_TAGLIB PkgConfig::TAGLIB)
 endif()
 
+# Version shown by -version. CI sets SL_VERSION (the tag, or "nightly"); the commit is read at configure time.
+
+set(SL_VERSION "${PROJECT_VERSION}" CACHE STRING "Version shown by sl -version")
+set(SL_COMMIT "")
+
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE SL_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+endif()
+
+configure_file(src/core/version.hpp.in "${CMAKE_BINARY_DIR}/generated/version.hpp" @ONLY)
+
 # Executable
 
 add_executable(sl
@@ -45,12 +62,13 @@ add_executable(sl
 
 if(WIN32)
     target_sources(sl PRIVATE src/platform/platform_windows.cpp)
+    target_compile_definitions(sl PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN) # windows.h (also via curl.h) must not define min/max
     target_link_libraries(sl PRIVATE shell32 advapi32 user32)
 else()
     target_sources(sl PRIVATE src/platform/platform_linux.cpp)
 endif()
 
-target_include_directories(sl PRIVATE src/core)
+target_include_directories(sl PRIVATE src/core "${CMAKE_BINARY_DIR}/generated")
 target_include_directories(sl SYSTEM PRIVATE includes) # vendored (modified) nlohmann json
 
 target_link_libraries(sl PRIVATE CURL::libcurl ${SL_TAGLIB} Threads::Threads)

@@ -1,5 +1,7 @@
 # SoundLoad
-`sl` downloads SoundCloud tracks with as much of their data as possible: the audio, the cover art
+[![Stable release](https://img.shields.io/github/v/release/user28047284/SoundLoad-Linux?filter=v*&label=stable%20release)](https://github.com/user28047284/SoundLoad-Linux/releases)
+
+`sl` downloads SoundCloud tracks on Linux and Windows with as much of their data as possible: the audio, the cover art
 in its highest available resolution, and tags for title, artist, album, genre, year and a comment
 with the upload date, original title, description and tags. The goal is to make saving songs, and
 moving them to other platforms, painless.
@@ -9,31 +11,55 @@ who designed and wrote the original code. Please report issues on this repositor
 
 Only download content you have the right to save.
 
-SoundCloud only serves AAC now, so tracks are saved as `.m4a`. To play them in Spotify on Linux
+SoundCloud only serves AAC now, so tracks are saved as `.m4a`. To play them in Spotify
 and sync them to your phone, see [SPOTIFY.md](SPOTIFY.md).
 
 ## Installation
-Install the dependencies (a C++20 compiler, CMake, pkg-config, libcurl and TagLib 2.x):
+
+### Download
+Get it from the [Releases](../../releases) page:
+- **Nightly** (marked *Latest*): built automatically from every change, so it always has the newest
+  fixes and features.
+- **Numbered versions** (e.g. `v1.2.0`): tested stable versions. The newest one is linked at the
+  top of this README.
+
+| System  | File                     | Notes                                                       |
+| ------- | ------------------------ | ----------------------------------------------------------- |
+| Linux   | `sl-linux-x86_64.tar.gz` | Needs glibc 2.39+ (e.g. Arch, Fedora 40, Ubuntu 24.04, Debian 13) and libcurl |
+| Windows | `sl-windows-x86_64.zip`  | One self-contained `sl.exe`                                 |
+
+Extract it anywhere. To run `sl` from any folder, use `sl -pvars` once: it shows how to add its
+folder to your `PATH` and offers to do it (on Linux in your shell profile, on Windows in your user
+`PATH` setting, with a Yes/No dialog). Nothing is changed unless you agree. It also offers this on
+the first run. On Windows you can also double-click `sl.exe`: the window stays open until you press Enter.
+
+**Install `ffmpeg` too** (Linux: your package manager, Windows: `winget install Gyan.FFmpeg`).
+SoundCloud streams AAC in fragments, and joined together they form a "fragmented MP4" whose header
+says the track is 0 seconds long, so players like Spotify show no length. With `ffmpeg` installed,
+`sl` repackages each download into a regular MP4 (no re-encoding, nothing is lost). Without it
+downloads still work, with a warning.
+
+### Building from source
+**Linux:** install a C++20 compiler (GCC 13+ or Clang 17+), CMake, pkg-config, libcurl and TagLib 2.x:
 
 - Arch: `sudo pacman -S --needed base-devel cmake pkgconf curl taglib`
 - Debian/Ubuntu: `sudo apt install build-essential cmake pkg-config libcurl4-openssl-dev libtag-dev`
+  (needs a release that packages TagLib 2.x, such as Debian 13; on older ones build TagLib from source)
 - Fedora: `sudo dnf install gcc-c++ cmake pkgconf-pkg-config libcurl-devel taglib-devel`
 
-Then build and install it:
 ```
 cmake -S . -B build
 cmake --build build -j
 cmake --install build --prefix ~/.local    # installs ~/.local/bin/sl
 ```
 
-**`ffmpeg` is recommended.** SoundCloud streams AAC in fragments, and joined together they form a
-"fragmented MP4" whose header says the track is 0 seconds long, so players like Spotify show no
-length. With `ffmpeg` installed, `sl` repackages each download into a regular MP4 (no re-encoding,
-nothing is lost). Without it downloads still work, with a warning.
-
-If you don't install it to a folder that's already in your `PATH` (like `~/.local/bin`), `sl`
-offers to add its folder to your shell profile the first time it runs, or when you use `-pvars`.
-Nothing is changed unless you answer `y`.
+**Windows:** install Visual Studio 2022 (with "Desktop development with C++") and
+[vcpkg](https://github.com/microsoft/vcpkg). The dependencies in `vcpkg.json` are installed
+automatically:
+```
+cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static
+cmake --build build --config Release
+```
 
 ## Usage
 ```
@@ -46,9 +72,16 @@ Quote links and values that contain spaces or shell characters (`? & * ; < > |`)
 
 Settings marked as saveable are stored in `cfg.json` when you add `-s`, and used for every
 download after that. Options given on the command line always win over saved ones. `cfg.json` is
-kept next to `sl`; use `-xdg` to keep it in `~/.config/soundload/` (or `$XDG_CONFIG_HOME/soundload/`)
-instead, e.g. if `sl` is installed somewhere you can't write to. Once a `cfg.json` exists there, it
-is used automatically.
+kept next to `sl`; use `-xdg` to keep it in your user settings folder instead, e.g. if `sl` is
+installed somewhere you can't write to. Once a `cfg.json` exists there, it is used automatically.
+
+|                | Linux                                         | Windows                                 |
+| -------------- | --------------------------------------------- | --------------------------------------- |
+| `cfg.json`     | next to `sl`, or `~/.config/soundload/`       | next to `sl.exe`, or `%APPDATA%\soundload\` |
+| `-undo` history | `~/.local/state/soundload/history.json`      | `%LOCALAPPDATA%\soundload\history.json` |
+
+On Linux, `$XDG_CONFIG_HOME` and `$XDG_STATE_HOME` are used instead of `~/.config` and
+`~/.local/state` when they are set.
 
 ## Options
 Option names ignore case.
@@ -76,8 +109,9 @@ Option names ignore case.
 | `-n-replace <from>`        |          | Remove a saved `-replace`                                 |    ✅    |
 | `-undo`                    |          | Delete any of your last 10 downloads                      |          |
 | `-cid <id>`                |          | SoundCloud client ID (normally found automatically)       |    ✅    |
-| `-xdg`                     |          | Keep `cfg.json` in `~/.config/soundload`                  |          |
+| `-xdg`                     |          | Keep `cfg.json` in your user settings folder (see above)  |          |
 | `-pvars`                   |          | Show how to add `sl` to `PATH` (asks first)               |          |
+| `-version`                 |          | Show the version                                          |          |
 | `-?`                       |          | Show all options                                          |          |
 
 ## Examples
@@ -126,7 +160,7 @@ sl https://soundcloud.com/sellasouls/bdayy-sexxx -n-audio -art -s
 `-undo` lists your last 10 downloads and deletes the ones you pick: a number, several (`1 3`) or a
 range (`1-3`). It asks once more before deleting anything. A download's separate cover art (`-art`) is
 deleted with it. If a download replaced an older copy of the song, the older copy can't be brought
-back. The list is kept in `~/.local/state/soundload/history.json`.
+back.
 ```
 $ sl -undo
 Last downloads (newest first):
@@ -147,7 +181,9 @@ deleted 1 download
 - Some tracks are only streamed encrypted (DRM). These can't be downloaded and `sl` says so.
 - Only single tracks can be downloaded, not albums, playlists or profiles. Go+ tracks can't be
   downloaded either (they may work with a client ID from a Go+ account, not tested).
-- The characters `< > : " / \ | ? *` are replaced with `_` in file names. Unicode is kept.
+- The characters `< > : " / \ | ? *` are replaced with `_` in file names, and names Windows
+  reserves (`CON`, `NUL`, `COM1`...) get a `_` added, so files can be copied between systems.
+  Unicode is kept.
 - Output folders must already exist.
 
 ## Client IDs
@@ -172,6 +208,18 @@ add("Original description: ", "description");
 add("Original tags: ",        "tag_list");
 ```
 Note that `nlohmann::json::value` is modified in this repository, see `src/core/pch.hpp`.
+
+## Releases
+GitHub Actions builds Linux and Windows binaries for every push and pull request
+(`.github/workflows/build.yml`). Each push to `master` replaces the **Nightly** release with the new
+builds, and it is always the repository's *Latest* release. To publish a numbered (stable) release,
+tag the commit; the release notes are generated from the commits since the previous one, and the
+link at the top of this README is updated to it:
+```
+git tag v1.2.0
+git push --tags
+```
+Tags with a suffix, like `v1.2.0-rc1`, are published as pre-releases and don't change the README.
 
 ## License
 MIT, see [`LICENSE.txt`](LICENSE.txt).

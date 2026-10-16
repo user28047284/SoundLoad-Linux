@@ -34,6 +34,11 @@ namespace platform
 	// Runs a program found through PATH, without a shell, and waits for it. args[0] is the program.
 	run_result run_program(const std::vector<std::string>& args);
 
-	// Shows how to add dir to PATH and offers to do it (asks first)
+	// Shows how to add dir to PATH and offers to do it (asks first: a console prompt on Linux,
+	// a Yes/No dialog on Windows)
 	void add_to_path(const std::filesystem::path& dir);
+
+	// Windows: if sl was started by double-clicking it, waits for Enter so the window doesn't close
+	// before its output can be read. Does nothing in a terminal, in scripts, and on Linux.
+	void pause_if_double_clicked(void);
 }
