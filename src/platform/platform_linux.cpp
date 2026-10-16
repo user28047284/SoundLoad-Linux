@@ -3,7 +3,9 @@
 #include "util.hpp"
 #include "platform.hpp"
 
+#include <poll.h>
 #include <spawn.h>
+#include <termios.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -65,6 +67,81 @@ namespace platform
 	bool stdin_is_terminal(void)
 	{
 		return isatty(STDIN_FILENO);
+	}
+
+	bool read_line_or_escape(const std::string_view prompt, std::string& line)
+	{
+		std::cout << prompt << std::flush;
+
+		termios saved{};
+		if (tcgetattr(STDIN_FILENO, &saved) != 0)
+		{
+			return false;
+		}
+
+		termios raw = saved;
+		raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO | ISIG); // Ctrl+C arrives as a key below
+		raw.c_cc[VMIN]  = 1;
+		raw.c_cc[VTIME] = 0;
+		tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+
+		auto read_byte = [](unsigned char& byte) { return read(STDIN_FILENO, &byte, 1) == 1; };
+		auto echo      = [](const std::string_view text) { return write(STDOUT_FILENO, text.data(), text.size()); };
+
+		std::string text;
+		bool entered = false;
+
+		for (unsigned char c; read_byte(c);)
+		{
+			if (c == 27) // Esc on its own, or the start of an arrow or function key sequence
+			{
+				pollfd next{ STDIN_FILENO, POLLIN, 0 };
+				if (poll(&next, 1, 30) <= 0)
+				{
+					break;
+				}
+
+				unsigned char b = 0;
+				if (read_byte(b) && (b == '[' || b == 'O'))
+				{
+					while (read_byte(b) && b < 0x40) {}
+				}
+			}
+			else if (c == '\n' || c == '\r')
+			{
+				entered = true;
+				break;
+			}
+			else if (c == 3 || (c == 4 && text.empty())) // Ctrl+C, Ctrl+D
+			{
+				break;
+			}
+			else if (c == 127 || c == 8)
+			{
+				if (!text.empty())
+				{
+					while (!text.empty())
+					{
+						const unsigned char last = static_cast<unsigned char>(text.back());
+						text.pop_back();
+						if ((last & 0xC0) != 0x80) break; // that was the first byte of the character
+					}
+
+					echo("\b \b");
+				}
+			}
+			else if (c >= 32)
+			{
+				text += static_cast<char>(c);
+				echo(std::string_view(reinterpret_cast<const char*>(&c), 1));
+			}
+		}
+
+		tcsetattr(STDIN_FILENO, TCSANOW, &saved);
+		echo("\n");
+
+		if (entered) line = text;
+		return entered;
 	}
 
 	run_result run_program(const std::vector<std::string>& args)

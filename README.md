@@ -27,8 +27,9 @@ Get it from the [Releases](https://github.com/user28047284/SoundLoad-Linux/relea
 | Windows | `sl-windows-x86_64.zip`  | One self-contained `sl.exe`                                 |
 
 To run `sl` from any folder, use `sl -pvars` once: it offers to add its folder to your `PATH`
-(nothing is changed unless you agree). It also offers this on the first run. On Windows you can
-also double-click `sl.exe`: the window stays open until you press Enter.
+(nothing is changed unless you agree). It also offers this on the first run. Running `sl` with no
+arguments, or double-clicking `sl.exe`, asks for links (options can follow each) until you press Esc;
+each one is downloaded in turn.
 
 **Install `ffmpeg` too** (Linux: your package manager, Windows: `winget install Gyan.FFmpeg`).
 SoundCloud streams AAC in fragments, which players like Spotify show with no length. With `ffmpeg`

@@ -1,5 +1,6 @@
 #include "pch.hpp"
 #include "logs.hpp"
+#include "util.hpp"
 #include "../config/config.hpp"
 #include "../history/history.hpp"
 #include "../platform/platform.hpp"
@@ -11,6 +12,65 @@ struct silent_taglib_listener : TagLib::DebugListener
 {
 	void printMessage(const TagLib::String&) override {}
 };
+
+// Splits a typed line into arguments (double quotes group words) and moves the link to the front
+static std::vector<std::string> split_line(const std::string& line)
+{
+	std::vector<std::string> args;
+	std::string token;
+	bool in_quotes = false, has_token = false;
+
+	for (const char ch : line + ' ')
+	{
+		if (ch == '"')
+		{
+			in_quotes = !in_quotes;
+			has_token = true;
+		}
+		else if (!in_quotes && std::isspace(static_cast<unsigned char>(ch)))
+		{
+			if (has_token) args.push_back(std::move(token));
+			token.clear();
+			has_token = false;
+		}
+		else
+		{
+			token += ch;
+			has_token = true;
+		}
+	}
+
+	const auto link = std::ranges::find_if(args, [](const std::string& arg) { return util::istarts_with(arg, "https://soundcloud.com/"); });
+	if (link != args.end()) std::rotate(args.begin(), link, link + 1);
+
+	return args;
+}
+
+// Started without arguments in a terminal (e.g. double-clicked on Windows): download one line after
+// another until Esc is pressed. Every line runs in its own sl process so options don't carry over.
+static int run_interactive(const std::string& program)
+{
+	const std::filesystem::path dir = platform::executable_dir();
+	const std::string self = dir.empty() ? program : util::to_utf8(dir / util::to_path(program).filename());
+
+	std::cout << "Paste a SoundCloud link, options can follow it (e.g. -p). Press Esc to exit.\n";
+
+	for (std::string line; platform::read_line_or_escape("\n> ", line);)
+	{
+		std::vector<std::string> args = split_line(line);
+		if (args.empty()) continue;
+
+		args.insert(args.begin(), self);
+
+		if (platform::run_program(args) == platform::run_result::missing)
+		{
+			err::log("failed to start \"{}\"", self);
+			return 1;
+		}
+	}
+
+	return 0;
+}
 
 static int run(const std::vector<std::string>& args)
 {
@@ -96,7 +156,14 @@ int main(int argc, char* argv[])
 
 	try
 	{
-		exit_code = run(platform::utf8_arguments(argc, argv));
+		const std::vector<std::string> args = platform::utf8_arguments(argc, argv);
+
+		if (args.size() == 1 && platform::stdin_is_terminal())
+		{
+			return run_interactive(args[0]);
+		}
+
+		exit_code = run(args);
 	}
 	catch (const std::exception& e)
 	{
