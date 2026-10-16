@@ -1,149 +1,86 @@
 #pragma once
 
-// TYPES
-
+// cfg.json. Missing keys keep their defaults and unknown keys (such as the removed AAC options)
+// are ignored, so config files from older versions still load.
 struct cfg_format
 {
 	std::string cid;
 	std::string art_out_dir;
 	std::string track_out_dir;
-	bool get_track_audio     = true;
-	bool get_track_art       = false;
-	std::map<std::string, std::string> artist_replacements; // set with -replace
+	bool        get_track_audio = true;
+	bool        get_track_art   = false;
+	std::map<std::string, std::string> artist_replacements; // -replace, keys are lowercase
 };
 
-// Missing keys keep their default values and unknown keys (such as the removed AAC options)
-// are ignored, so config files from older versions still load
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(cfg_format, cid, art_out_dir, track_out_dir, get_track_audio, get_track_art, artist_replacements)
-
-// One file written by a download, recorded for -undo
-struct downloaded_file
-{
-	std::string path;          // absolute
-	bool        replaced = false; // an earlier copy existed and was overwritten
-};
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(downloaded_file, path, replaced)
-
-// All files written by one run of sl (the song and, with -art, its cover)
-struct download_entry
-{
-	std::vector<downloaded_file> files;
-};
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(download_entry, files)
-
-// CONFIG DATA
 
 namespace cfg
 {
 	//
-	//// GLOBAL CONFIG VARIABLES
+	//// SETTINGS (all strings are UTF-8)
 	//
 
-	struct cfg_flags_t
+	struct flags_t
 	{
-		// 14/16 bits used
+		bool save_cfg          = false; // -s: save the saveable arguments to cfg.json
+		bool save_cid          = false; // a client ID was resolved automatically, saved even without -s
+		bool separate_art      = false; // [saveable] -art: also save the cover art as its own file
+		bool no_separate_art   = false; // [saveable] -n-art
+		bool download_audio    = false; // [saveable] -audio (the default, overrides a saved -n-audio)
+		bool no_audio_download = false; // [saveable] -n-audio
+		bool add_to_path       = false; // -pvars
+		bool use_xdg           = false; // -xdg: keep cfg.json in the XDG config directory
+		bool parse_title       = false; // -p: split "Artist - Title" track names
+		bool undo              = false; // -undo
+		bool show_help         = false; // -?
+		bool cover_src_path    = false; // -isrc is an image file
+		bool cover_src_sc_link = false; // -isrc is a SoundCloud link (its cover art is used)
+		bool fresh_cfg         = false; // there was no cfg.json yet
+	} inline f;
 
-		uint16_t add_to_path       : 1; // Adds program to PATH variables
-		uint16_t save_cfg          : 1; // Saves applicable arguments to config (set when -save is used)
-		uint16_t save_cid          : 1; // Saves the client ID to config. Set when a client ID is automatically resolved.
-		uint16_t seperate_art      : 1; // [saveable] downloads track's cover art to its own file
-		uint16_t no_seperate_art   : 1; // [saveable] [default] disables the seperate_art flag if it was saved to config
-		uint16_t download_audio    : 1; // [saveable] [default] reenables audio downloads if disabled by no_audio_download in config
-		uint16_t no_audio_download : 1; // [saveable] disables audio downloads
-		uint16_t no_link_provided  : 1; // Indicates that no link was provided - used when modifying config without downloading anything
-		uint16_t cover_src_path    : 1; // Provided source for audio cover art is an image path on the computer
-		uint16_t cover_src_sc_link : 1; // Provided source for audio cover art is a SoundCloud link (uses cover art from song/profile)
-		uint16_t fresh_cfg         : 1; // cfg.json was just created
-		uint16_t use_xdg           : 1; // Stores cfg.json in the XDG config directory
-		uint16_t parse_title       : 1; // Splits "Artist - Title" track names into artist + title (not saveable)
-		uint16_t undo              : 1; // Lists recent downloads and deletes the ones picked
-	} inline f = {};
-
-	struct track_data_t
+	// Values given on the command line that replace what is read from SoundCloud
+	struct overrides_t
 	{
-		// Output data
-
-		std::string audio_name; // Name for downloaded audio. Derived from track title by default.
-		std::string image_name; // Name for downloaded cover art. Derived from track title by default.
-
-		// Audio metadata
-
+		std::string audio_name; // file name for the audio (default: track title)
+		std::string image_name; // file name for the cover art (default: track title)
 		std::string title;
-		std::string comments;
-		std::string contrib_artists; // contributing artists
-		std::string album_artists;   // album artist
+		std::string comment;
+		std::string artists;
+		std::string album_artist;
 		std::string album;
 		std::string genre;
-		std::string number; // track number (for albums)
+		std::string number; // track number
 		std::string year;
-	} inline g_data = {};
+	} inline overrides;
 
-	// All strings are UTF-8
-
+	inline std::string link;      // the SoundCloud link to download, empty when only changing settings
 	inline std::string client_id; // SoundCloud client ID
-	inline std::string audio_dir; // Audio download directory
-	inline std::string image_dir; // Cover art download directory
-	inline std::string image_src; // Audio cover art source (file path, soundcloud track link, or image link)
+	inline std::string audio_dir; // audio download directory, ends with '/' unless empty
+	inline std::string image_dir; // cover art download directory, ends with '/' unless empty
+	inline std::string image_src; // -isrc: image path, image link or SoundCloud link
 
-	inline std::filesystem::path path_cache; // Stores the directory of sl or the path of cfg.json
-
-	// Artist names to replace in the artist tag (-replace, saveable). Keys are lowercase, matching
-	// ignores case. removed_replacements holds names given to -n-replace.
+	// Artist names to replace in the artist tag (-replace). Keys are lowercase, matching ignores case.
 	inline std::map<std::string, std::string> artist_replacements;
-	inline std::vector<std::string>           removed_replacements;
-
-	inline std::vector<downloaded_file> downloaded_files; // files written by this run, for -undo
 
 	//
-	//// FORWARD DECLARATIONS
+	//// FUNCTIONS
 	//
 
 	bool parse_arguments(int argc, const char* const argv[]);
 
-	void read_config(const cfg_format& data);
+	void show_usage(void);
 
-	void save_config(cfg_format& data);
+	// Reads cfg.json (if it exists) and fills in everything not given on the command line
+	bool load_config(void);
 
-	// cfg.json in the program directory (path_cache), or in the XDG config directory with -xdg or if it already exists there
-	std::filesystem::path config_file_path(void);
+	// Writes cfg.json with -s, or when a client ID was resolved automatically
+	bool save_config(void);
 
-	void add_to_path(const std::filesystem::path& program_dir);
-
-	// Adds downloaded_files to the -undo history (the last 10 downloads)
-	void record_download(void);
-
-	// -undo: lists the last downloads and deletes the ones the user picks
-	void undo_downloads(void);
-
-	//
-	//// HELPERS
-	//
-
-	inline bool audio_flags_set(void)
-	{
-		return cfg::f.download_audio || cfg::f.no_audio_download;
-	}
-
-	inline bool art_flags_set(void)
-	{
-		return cfg::f.seperate_art || cfg::f.no_seperate_art;
-	}
-
-	// Lowercases ASCII letters only, so the byte length (and UTF-8) is unchanged
-	inline std::string lowercase(std::string text)
-	{
-		for (char& ch : text)
-		{
-			if (ch >= 'A' && ch <= 'Z') ch += 32;
-		}
-
-		return text;
-	}
+	// Shows how to add sl's directory to PATH and offers to do it
+	void add_to_path(void);
 
 	inline bool cover_art_only(void)
 	{
-		return cfg::f.seperate_art && cfg::f.no_audio_download;
+		return f.separate_art && f.no_audio_download;
 	}
 }

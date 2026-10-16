@@ -1,6 +1,7 @@
 #include "pch.hpp"
 #include "logs.hpp"
 #include "../config/config.hpp"
+#include "../history/history.hpp"
 #include "../site_api/site_api.hpp"
 
 // Some distributions build TagLib with debug output enabled, which prints messages such as
@@ -10,129 +11,68 @@ struct silent_taglib_listener : TagLib::DebugListener
 	void printMessage(const TagLib::String&) override {}
 };
 
-static void fix_path(std::string& path)
-{
-	if (!path.empty())
-	{
-		if (path.back() != '/') path.push_back('/');
-	}
-}
-
-static bool save_config(cfg_format& cfg_data_raw)
-{
-	if (cfg::f.save_cfg || cfg::f.save_cid)
-	{
-		if (cfg::f.save_cfg)
-		{
-			cfg::save_config(cfg_data_raw);
-		}
-		else
-		{
-			cfg_data_raw.cid = cfg::client_id;
-		}
-
-		std::fstream cfg_file(cfg::path_cache, std::ios::out | std::ios::trunc);
-		if (cfg_file.fail())
-		{
-			err::log("failed to open/create cfg.json");
-			return false;
-		}
-
-		try
-		{
-			cfg_file << Json(cfg_data_raw).dump();
-		}
-		catch (...)
-		{
-			cfg_file.close();
-			err::log("failed to save config");
-			return false;
-		}
-
-		cfg_file.close();
-	}
-
-	return true;
-}
-
-static bool read_config(cfg_format& cfg_data_raw)
-{
-	if (std::filesystem::exists(cfg::path_cache))
-	{
-		std::fstream cfg_file(cfg::path_cache, std::ios::in);
-		if (cfg_file.fail())
-		{
-			err::log("failed to open cfg.json");
-			return false;
-		}
-
-		try
-		{
-			Json cfg_data_json;
-			cfg_file >> cfg_data_json;
-			cfg_data_raw = cfg_data_json.get<cfg_format>();
-		}
-		catch (...)
-		{
-			cfg_file.close();
-			err::log("failed to read config");
-			return false;
-		}
-
-		cfg_file.close();
-		cfg::read_config(cfg_data_raw);
-	}
-	else
-	{
-		cfg::f.fresh_cfg = true;
-	}
-
-	return true;
-}
-
-static bool init_program(int argc, char* argv[], cfg_format& raw_cfg)
+static int run(const int argc, const char* const argv[])
 {
 	if (!cfg::parse_arguments(argc, argv))
 	{
-		return false;
+		return 1;
+	}
+
+	if (cfg::f.show_help)
+	{
+		cfg::show_usage();
+		return 0;
 	}
 
 	if (cfg::f.undo)
 	{
-		cfg::undo_downloads();
-		return false;
+		history::undo();
+		return 0;
 	}
 
-	const std::filesystem::path program_dir = cfg::path_cache;
-	cfg::path_cache = cfg::config_file_path();
-
-	if (!read_config(raw_cfg))
+	if (!cfg::load_config())
 	{
-		return false;
-	}
-
-	if (!cfg::f.no_link_provided && cfg::client_id.empty() && !get_client_id())
-	{
-		err::log("no client ID provided/resolved");
-		return false;
+		return 1;
 	}
 
 	if (cfg::f.add_to_path || cfg::f.fresh_cfg)
 	{
-		cfg::add_to_path(program_dir); // failure is ignored as its non-vital to primary functionality
+		cfg::add_to_path(); // not needed to download, so failures are ignored
 	}
 
-	if (cfg::f.no_link_provided)
+	// Without a link, the arguments only change settings
+
+	if (cfg::link.empty())
 	{
-		if (save_config(raw_cfg))
+		if (!cfg::save_config())
 		{
-			std::cout << "\n[!] INPUT HANDLED\n";
+			return 1;
 		}
 
-		return false;
+		std::cout << "\n[!] INPUT HANDLED\n";
+		return 0;
 	}
 
-	return true;
+	if (cfg::client_id.empty() && !get_client_id())
+	{
+		err::log("no client ID provided/resolved");
+		return 1;
+	}
+
+	sc_upload upload(cfg::link);
+	const bool downloaded = upload.valid() && upload.download();
+
+	history::save(); // also when a later step failed, so files that were written can be undone
+
+	if (!downloaded)
+	{
+		return 1;
+	}
+
+	std::cout << "\n[!] DOWNLOAD(s) COMPLETE\n";
+
+	cfg::save_config(); // after the download, in case a fresh client ID had to be fetched
+	return 0;
 }
 
 int main(int argc, char* argv[])
@@ -142,27 +82,14 @@ int main(int argc, char* argv[])
 
 	const net::global_init curl_init;
 
-	cfg_format raw_cfg = {};
-	if (!init_program(argc, argv, raw_cfg))
+	try
 	{
+		return run(argc, argv);
+	}
+	catch (const std::exception& e)
+	{
+		history::save();
+		err::log("unexpected error: {}", e.what());
 		return 1;
 	}
-
-	fix_path(cfg::audio_dir);
-	fix_path(cfg::image_dir);
-
-	sc_upload post(argv[1]);
-	const bool downloaded = !post.f.error_occured && post.download();
-
-	cfg::record_download(); // also when a later step failed, so files that were written can be undone
-
-	if (!downloaded)
-	{
-		return 1;
-	}
-
-	std::cout << "\n[!] DOWNLOAD(s) COMPLETE\n";
-
-	save_config(raw_cfg); // this is done after downloads complete incase request_failed had to get a new CID
-	return 0;
 }

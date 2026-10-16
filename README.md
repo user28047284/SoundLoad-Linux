@@ -1,115 +1,132 @@
 # SoundLoad
-The goal of this project is to help SoundCloud users save their favorite songs 
-with as much data as possible preserved, and to simplify the process of porting 
-songs to other platforms, which can be very tedious normally.
+`sl` downloads SoundCloud tracks with as much of their data as possible: the audio, the cover art
+in its highest available resolution, and tags for title, artist, album, genre, year and a comment
+with the upload date, original title, description and tags. The goal is to make saving songs, and
+moving them to other platforms, painless.
 
-Based on [SoundLoad](https://github.com/xref2000/SoundLoad) by [xref2000](https://github.com/xref2000), 
+Based on [SoundLoad](https://github.com/xref2000/SoundLoad) by [xref2000](https://github.com/xref2000),
 who designed and wrote the original code. Please report issues on this repository.
 
 Only download content you have the right to save.
 
-SoundCloud only serves AAC now, so tracks are saved as `.m4a`. To play them in Spotify on Linux 
+SoundCloud only serves AAC now, so tracks are saved as `.m4a`. To play them in Spotify on Linux
 and sync them to your phone, see [SPOTIFY.md](SPOTIFY.md).
 
-## Installation & usage
+## Installation
 Install the dependencies (a C++20 compiler, CMake, pkg-config, libcurl and TagLib 2.x):
 
 - Arch: `sudo pacman -S --needed base-devel cmake pkgconf curl taglib`
 - Debian/Ubuntu: `sudo apt install build-essential cmake pkg-config libcurl4-openssl-dev libtag-dev`
 - Fedora: `sudo dnf install gcc-c++ cmake pkgconf-pkg-config libcurl-devel taglib-devel`
 
-`ffmpeg` is an optional (but recommended) runtime dependency. SoundCloud serves
-AAC as HLS fragments, which are joined into a "fragmented MP4" whose header reports a duration of 0,
-so players like Spotify show no track length. If `ffmpeg` is on your `PATH`, `sl` repackages the file
-(stream copy, no re-encoding) so the real duration is stored. Without `ffmpeg` the download still
-works and you get a warning.
-
-Then build (and optionally install) the program:
+Then build and install it:
 ```
 cmake -S . -B build
 cmake --build build -j
-cmake --install build --prefix ~/.local    # optional, installs ~/.local/bin/sl
+cmake --install build --prefix ~/.local    # installs ~/.local/bin/sl
 ```
 
-`cfg.json` is stored next to `sl`. Use `-xdg` to store it in `~/.config/soundload/` (or 
-`$XDG_CONFIG_HOME/soundload/`) instead, which is useful if `sl` is installed somewhere you can't 
-write to. Once a `cfg.json` exists there it is used automatically, e.g. after `sl -xdg -s`.
+**`ffmpeg` is recommended.** SoundCloud streams AAC in fragments, and joined together they form a
+"fragmented MP4" whose header says the track is 0 seconds long, so players like Spotify show no
+length. With `ffmpeg` installed, `sl` repackages each download into a regular MP4 (no re-encoding,
+nothing is lost). Without it downloads still work, with a warning.
 
-Run `sl '-?'` to see a list of all available features, or reference the table below.
+If you don't install it to a folder that's already in your `PATH` (like `~/.local/bin`), `sl`
+offers to add its folder to your shell profile the first time it runs, or when you use `-pvars`.
+Nothing is changed unless you answer `y`.
 
-## Arguments (case-insensitive)
+## Usage
+```
+sl <track link> [options]    download a track
+sl [options] -s              only change saved settings
+sl -undo                     delete recent downloads
+sl '-?'                      list all options
+```
+Quote links and values that contain spaces or shell characters (`? & * ; < > |`), including `-?`.
 
-| Argument          |   Short  | Description                                          | Saveable? |
-| ----------------- | :------: | ---------------------------------------------------- | :-------: |
-| `-cid`            |     —    | SoundCloud client ID                                 |     ✅    |
-| `-xdg`            |     —    | Stores `cfg.json` in `~/.config/soundload`           |     ❌    |
-| `-pvars`          |     —    | Adds program to PATH (asks first)                    |     ❌    |
-| `-save`           |   `-s`   | Saves applicable arguments to `cfg.json`             |     ❌    |
-| `-undo`           |     —    | Delete any of your last 10 downloads (asks first)    |     ❌    |
-| `-img-name`       | `-iname` | Cover art file name                                  |     ❌    |
-| `-img-dst`        |  `-idst` | Cover art output directory                           |     ✅    |
-| `-img-src`        |  `-isrc` | Cover art source (path, SoundCloud link, image link) |     ❌    |
-| `-art`            |     —    | Independent cover art download                       |     ✅    |
-| `-n-art`          |     —    | Disable independent cover art download               |     ✅    |
-| `-audio-name`     | `-aname` | Audio file name                                      |     ❌    |
-| `-audio-dst`      |  `-adst` | Audio output directory                               |     ✅    |
-| `-audio`          |     —    | Enables audio downloads                              |     ✅    |
-| `-n-audio`        |     —    | Disables audio downloads                             |     ✅    |
-| `-title`          |   `-t`   | Audio tag title                                      |     ❌    |
-| `-comment`        |   `-c`   | Audio tag comment                                    |     ❌    |
-| `-artists`        |   `-a`   | Audio tag contributing artists                       |     ❌    |
-| `-a-artist`       |   `-aa`  | Audio tag album artist                               |     ❌    |
-| `-album`          |   `-al`  | Audio tag album                                      |     ❌    |
-| `-genre`          |   `-g`   | Audio tag genre                                      |     ❌    |
-| `-num`            |   `-n`   | Audio tag track number                               |     ❌    |
-| `-year`           |   `-y`   | Audio tag year                                       |     ❌    |
-| `-parse`          |   `-p`   | Split "Artist - Title" track names into artist + title |     ❌    |
-| `-replace <from> <to>` |  —  | Replace an artist name in the artist tag             |     ✅    |
-| `-n-replace <from>` |    —   | Remove a saved `-replace`                            |     ✅    |
+Settings marked as saveable are stored in `cfg.json` when you add `-s`, and used for every
+download after that. Options given on the command line always win over saved ones. `cfg.json` is
+kept next to `sl`; use `-xdg` to keep it in `~/.config/soundload/` (or `$XDG_CONFIG_HOME/soundload/`)
+instead, e.g. if `sl` is installed somewhere you can't write to. Once a `cfg.json` exists there, it
+is used automatically.
 
+## Options
+Option names ignore case.
+
+| Option                     | Short    | Description                                               | Saveable |
+| -------------------------- | -------- | --------------------------------------------------------- | :------: |
+| `-save`                    | `-s`     | Save the saveable options of this command to `cfg.json`   |          |
+| `-audio-dst <dir>`         | `-adst`  | Folder for audio files                                    |    ✅    |
+| `-img-dst <dir>`           | `-idst`  | Folder for cover art images                               |    ✅    |
+| `-audio-name <name>`       | `-aname` | Audio file name (default: the track title)                |          |
+| `-img-name <name>`         | `-iname` | Cover art file name (default: the track title)            |          |
+| `-audio` / `-n-audio`      |          | Download the audio (default) / don't                      |    ✅    |
+| `-art` / `-n-art`          |          | Also save the cover art as an image file / don't (default)|    ✅    |
+| `-img-src <source>`        | `-isrc`  | Cover art to embed: image file, image link or track link  |          |
+| `-title <title>`           | `-t`     | Title tag                                                 |          |
+| `-artists <artists>`       | `-a`     | Artist tag (default: the track's artist, or its uploader) |          |
+| `-a-artist <artist>`       | `-aa`    | Album artist tag                                          |          |
+| `-album <album>`           | `-al`    | Album tag (default: the track's album, or its title)      |          |
+| `-genre <genre>`           | `-g`     | Genre tag                                                 |          |
+| `-num <number>`            | `-n`     | Track number tag                                          |          |
+| `-year <year>`             | `-y`     | Year tag (default: the upload year)                       |          |
+| `-comment <text>`          | `-c`     | Comment tag, SoundCloud's details are added after it      |          |
+| `-parse`                   | `-p`     | Split "Artist - Title" track names into artist and title  |          |
+| `-replace <from> <to>`     |          | Replace an artist name in the artist tag                  |    ✅    |
+| `-n-replace <from>`        |          | Remove a saved `-replace`                                 |    ✅    |
+| `-undo`                    |          | Delete any of your last 10 downloads                      |          |
+| `-cid <id>`                |          | SoundCloud client ID (normally found automatically)       |    ✅    |
+| `-xdg`                     |          | Keep `cfg.json` in `~/.config/soundload`                  |          |
+| `-pvars`                   |          | Show how to add `sl` to `PATH` (asks first)               |          |
+| `-?`                       |          | Show all options                                          |          |
 
 ## Examples
 
-### Setting basic config info
-By running this, the audio output dir and cover art output dir will be saved to cfg.json.
+### Saving your folders
 ```
-$ sl -adst ~/Music -idst ~/Pictures/covers -s
-```
-
-### Downloading a song
-This will download the song, name the audio file "Extra Stixx", and set the contributing artists to "Pook G, Lul Jody".
-Other metadata will be automatically scraped from the page, but can of course be set manually.
-```
-$ sl https://soundcloud.com/fat-kid-915108395/exrta-stixxs-ft-pook-g-lul -aname "Extra Stixx" -a "Pook G, Lul Jody"
+sl -adst ~/Music -idst ~/Pictures/covers -s
 ```
 
-### Parsing the artist from the track name
-Many uploads put the artist in the track name. With `-p`, a title like
-"ISLURWHENITALK X 2SHANEZ - KILLEMALL (PROD. NIKO EAST)" is tagged with the artist
-"ISLURWHENITALK X 2SHANEZ" and the title "KILLEMALL (PROD. NIKO EAST)". The split happens at the first
-" - " (a hyphen, en dash or em dash with a space on each side), so names like "Mid-Air" are left alone.
-`-title` and `-artists` always win over the parsed values, and the file name still uses the full track
-name unless you set `-aname`.
+### Downloading a song with your own tags
+Everything not given is read from SoundCloud.
 ```
-$ sl https://soundcloud.com/some-artist/some-track -p
+sl https://soundcloud.com/fat-kid-915108395/exrta-stixxs-ft-pook-g-lul -aname "Extra Stixx" -a "Pook G, Lul Jody"
+```
+
+### Taking the artist from the track name
+Many uploads put the artist in the track name. With `-p`, "ISLURWHENITALK X 2SHANEZ - KILLEMALL
+(PROD. NIKO EAST)" is tagged with the artist "ISLURWHENITALK X 2SHANEZ" and the title "KILLEMALL
+(PROD. NIKO EAST)". It splits at the first " - " (a hyphen, en dash or em dash with spaces around it),
+so names like "Mid-Air" are left alone. `-title` and `-artists` win over the parsed values, and the
+file name keeps the full track name unless you set `-aname`.
+```
+sl https://soundcloud.com/some-artist/some-track -p
 ```
 
 ### Replacing artist names
-If an artist uploads under a name you don't want in your library, `-replace` swaps it in the artist 
-tag. Saved with `-s`, it applies to every download from then on. Matching ignores case and only 
-replaces whole names, so `wifiskeleton x 4jay` becomes `skeleton x 4jay`. It runs after `-p`, 
-so parsed artists are replaced too, but an artist given with `-artists` is left as it is. 
-Use `-n-replace 'wifiskeleton' -s` to remove it again.
+If an artist uploads under a name you don't want in your library, `-replace` swaps it in the artist
+tag. Saved with `-s`, it applies to every download. Matching ignores case and only replaces whole
+names, so `wifiskeleton x 4jay` becomes `skeleton x 4jay` but `-replace jay j` leaves `4jay` alone.
+It runs after `-p`, so parsed artists are replaced too, but an artist given with `-artists` is kept.
 ```
-$ sl -replace 'wifiskeleton' 'skeleton' -s
+sl -replace 'wifiskeleton' 'skeleton' -s     # add (repeat for more artists)
+sl -n-replace 'wifiskeleton' -s              # remove
+```
+
+### Saving cover art
+`-art` also saves the cover art as its own image, in the highest resolution SoundCloud has. Combined
+with `-n-audio`, only the cover art is downloaded. Useful for archiving underground music, where cover
+art is often changed or lost. Both can be saved with `-s`. Downloaded songs always get the cover art
+embedded, whether or not `-art` is used.
+```
+sl https://soundcloud.com/sellasouls/bdayy-sexxx -n-audio -art -s
 ```
 
 ### Undoing downloads
-`-undo` lists your last 10 downloads, newest first, and deletes the ones you pick: a number, 
-several (`1 3`) or a range (`1-3`). It asks again before deleting anything. A download's 
-separate cover art (`-art`) is deleted with it. If a download replaced an older copy of the 
-song, that older copy can't be brought back. The list is kept in 
-`~/.local/state/soundload/history.json`.
+`-undo` lists your last 10 downloads and deletes the ones you pick: a number, several (`1 3`) or a
+range (`1-3`). It asks once more before deleting anything. A download's separate cover art (`-art`) is
+deleted with it. If a download replaced an older copy of the song, the older copy can't be brought
+back. The list is kept in `~/.local/state/soundload/history.json`.
 ```
 $ sl -undo
 Last downloads (newest first):
@@ -120,61 +137,41 @@ Delete 1 download (1 file)? [y/N] y
 deleted 1 download
 ```
 
-### Downloading cover art
-By using the `-art` arg, you tell the program to seperately download the cover art from the track. It 
-should be noted that this option can be saved to cfg.json. This is useful for anyone archiving 
-underground music, where cover art is often changed or lost to time. The `-n-audio` arg is also used 
-and saved, preventing the track itself from being downloaded. Cover art will be embedded into the 
-tracks metadata (if one is downloaded) in the highest available quality no matter what.
-```
-$ sl https://soundcloud.com/sellasouls/bdayy-sexxx -n-audio -art -s
-```
-
-## Extensibility
-The source code is structured in such a way that makes adding new metadata fields extremely simple. 
-First, go to `https://api-v2.soundcloud.com/resolve?url=put_link_here&client_id=your_cid` and take note 
-of any fields you would like to archive. You then go to `site_api.cpp/sc_upload::create_comments` 
-and use the `add_comment` lambda, which takes just one simple line of code:
-```C++
-add_comment("Upload date: ",          "created_at");
-add_comment("Original title: ",       "title");
-add_comment("Original description: ", "description");
-add_comment("Original tags: ",        "tag_list");
-```
-
-## PATH
-Adding the program's directory to your PATH lets your shell find `sl` no matter your working 
-directory. When you run the program for the first time (or use the `-pvars` argument), it will 
-show the line to add to your shell profile (`~/.bashrc`, `~/.zshrc` or `config.fish`) and ask 
-whether to add it for you. Nothing is changed unless you answer `y`. Alternatively, install it 
-to `~/.local/bin` as shown above.
+## How downloads behave
+- Tracks are saved as 160 kbps AAC, or 96 kbps if that is all a track has (you get a warning).
+- Tracks without their own cover art get the uploader's profile picture, like on SoundCloud.
+- If the file already exists, `sl` asks before downloading it again and replacing it. When it isn't
+  run from a terminal (e.g. from a script), existing songs are skipped.
+- Songs are written under a hidden temporary name and only appear in the folder once they are fully
+  tagged, so music players that watch the folder (like Spotify) never pick up an unfinished file.
+- Some tracks are only streamed encrypted (DRM). These can't be downloaded and `sl` says so.
+- Only single tracks can be downloaded, not albums, playlists or profiles. Go+ tracks can't be
+  downloaded either (they may work with a client ID from a Go+ account, not tested).
+- The characters `< > : " / \ | ? *` are replaced with `_` in file names. Unicode is kept.
+- Output folders must already exist.
 
 ## Client IDs
-A client ID is a string that must be appended to certain requests in order for 
-them to succeed. The program will automatically resolve and save a client ID, 
-but in the case that it fails, you can provide a client ID manually like this:
+SoundCloud's API needs a client ID. `sl` finds one automatically and saves it, and fetches a new one
+if the saved one stops working. If that fails, you can set one yourself:
 
-- Open browser dev tools (`ctrl+shift+i`)
-- Go to the network tab
-- Go to [SoundCloud](https://soundcloud.com)
-- Filter URLs with "client_id="
-- Find a request with a client ID in it
-- Pass that ID to `sl` as the value for the `-cid` argument
+1. Open your browser's developer tools (`Ctrl+Shift+I`) and go to the Network tab
+2. Open [SoundCloud](https://soundcloud.com)
+3. Filter the requests by `client_id=` and copy the ID from one of them
+4. Run `sl -cid <id> -s`
 
-That being said, please open an issue on this repository if it's failing to resolve 
-a client ID automatically, as failure is indicative of a SoundCloud update.
+Please also open an issue, since this usually means SoundCloud changed something.
 
-## Notes
-- Tracks are downloaded as 160 kbps AAC. If a track only has a 96 kbps AAC stream, that is used.
-- `nlohmann::json::value` has multiple modifications in this repo - check `pch.hpp` for more info.
-- Unicode characters are supported in file names and metadata.
-- The following characters will be replaced with an underscore in file names: `< > : " / \ | ? *`
-- Quote `-?` (`sl '-?'`) and any links containing `?` or `&`, otherwise your shell will interpret them.
-- Output directories must already exist.
-- If a song's file already exists, `sl` asks before downloading it again and replacing it. When it isn't 
-  run from a terminal (e.g. from a script), existing songs are skipped.
-- Album/playlist downloads are not implemented yet.
-- Go+ songs cannot be downloaded (may work if you use a CID generated by a Go+ account, not tested).
+## Adding metadata
+To keep more of SoundCloud's data, look at the fields in
+`https://api-v2.soundcloud.com/resolve?url=<track link>&client_id=<client id>` and add them to the
+comment in `sc_upload::build_comment` (`src/site_api/site_api.cpp`), one line each:
+```C++
+add("Upload date: ",          "created_at");
+add("Original title: ",       "title");
+add("Original description: ", "description");
+add("Original tags: ",        "tag_list");
+```
+Note that `nlohmann::json::value` is modified in this repository, see `src/core/pch.hpp`.
 
 ## License
 MIT, see [`LICENSE.txt`](LICENSE.txt).

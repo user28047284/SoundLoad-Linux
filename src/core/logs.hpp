@@ -2,39 +2,30 @@
 
 #include "../net/http.hpp"
 
+// Errors and warnings go to stderr. The mutex keeps lines from different threads apart.
+
 namespace err
 {
 	inline std::mutex log_mutex;
 
-	template <typename... t> void warn(std::format_string<t...> fmt, t&&... args)
+	inline void print(const std::string_view prefix, const std::string& message)
 	{
-		const std::lock_guard<std::mutex> lock(log_mutex);
-		std::cerr << "WARNING: " << std::format(fmt, std::forward<t>(args)...) << '\n';
+		const std::lock_guard lock(log_mutex);
+		std::cerr << prefix << message << '\n';
 	}
 
-	template <typename... t> void warn_ex(std::format_string<t...> fmt, t&&... args)
+	template <typename... T> void warn(std::format_string<T...> fmt, T&&... args)
 	{
-		const int error = errno;
-		const std::lock_guard<std::mutex> lock(log_mutex);
-		std::cerr << "WARNING: " << std::format(fmt, std::forward<t>(args)...) << "\nError code: " << error << " (" << std::strerror(error) << ")\n";
+		print("WARNING: ", std::format(fmt, std::forward<T>(args)...));
 	}
 
-	template <typename... t> void log(std::format_string<t...> fmt, t&&... args)
+	template <typename... T> void log(std::format_string<T...> fmt, T&&... args)
 	{
-		const std::lock_guard<std::mutex> lock(log_mutex);
-		std::cerr << "ERROR: " << std::format(fmt, std::forward<t>(args)...) << '\n';
-	}
-
-	template <typename... t> void log_ex(std::format_string<t...> fmt, t&&... args)
-	{
-		const int error = errno;
-		const std::lock_guard<std::mutex> lock(log_mutex);
-		std::cerr << "ERROR: " << std::format(fmt, std::forward<t>(args)...) << "\nError code: " << error << " (" << std::strerror(error) << ")\n";
+		print("ERROR: ", std::format(fmt, std::forward<T>(args)...));
 	}
 
 	inline void log_net(const net::Response& r)
 	{
-		const std::lock_guard<std::mutex> lock(log_mutex);
-		std::cerr << "ERROR: request to \"" << r.url << "\" failed with code " << r.status_code << '\n';
+		log("request to \"{}\" failed with code {}", r.url, r.status_code);
 	}
 }

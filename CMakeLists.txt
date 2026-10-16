@@ -24,6 +24,9 @@ find_package(Threads REQUIRED)
 add_executable(sl
     src/config/config.cpp
     src/core/main.cpp
+    src/core/util.cpp
+    src/history/history.cpp
+    src/media/m4a.cpp
     src/net/http.cpp
     src/site_api/site_api.cpp
 )

@@ -1,5 +1,9 @@
 #include "http.hpp"
 
+#include <algorithm>
+#include <atomic>
+#include <thread>
+
 #include <curl/curl.h>
 
 namespace net
@@ -55,9 +59,28 @@ namespace net
 		return r;
 	}
 
-	std::shared_future<Response> get_async(const std::string& url, long timeout_ms)
+	std::vector<Response> get_all(const std::vector<std::string>& urls, const size_t max_parallel, const long timeout_ms)
 	{
-		return std::async(std::launch::async, [url, timeout_ms](void) { return get(url, timeout_ms); }).share();
+		std::vector<Response> responses(urls.size());
+		std::atomic<size_t> next = 0;
+
+		{
+			std::vector<std::jthread> workers;
+			const size_t count = std::min(max_parallel, urls.size());
+
+			for (size_t i = 0; i < count; ++i)
+			{
+				workers.emplace_back([&](void)
+					{
+						for (size_t index; (index = next++) < urls.size();)
+						{
+							responses[index] = get(urls[index], timeout_ms);
+						}
+					});
+			}
+		} // jthreads join here
+
+		return responses;
 	}
 
 	global_init::global_init()

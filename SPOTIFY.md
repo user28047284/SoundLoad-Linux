@@ -33,7 +33,7 @@ FFmpeg 4 to 7 package is available and point `LD_LIBRARY_PATH` at its library di
 Restart Spotify completely afterwards.
 
 **2. The track length shows as `-:--`.**
-`sl` fixes this automatically when `ffmpeg` is installed (see the [README](README.md#installation--usage)). 
+`sl` fixes this automatically when `ffmpeg` is installed (see the [README](README.md#installation)). 
 For `.m4a` files downloaded without it, repackage them (no re-encoding, nothing is lost):
 
 ```

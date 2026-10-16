@@ -1,11 +1,10 @@
 #pragma once
 
-#include <future>
 #include <string>
+#include <vector>
 
-// Minimal libcurl wrapper: blocking and asynchronous GET requests. Session defaults:
-// "curl/<version>" user agent, redirects followed (max 50), in-memory cookie engine,
-// TCP keepalive and all built-in content encodings accepted.
+// Minimal libcurl wrapper. Session defaults: "curl/<version>" user agent, redirects followed
+// (max 50), in-memory cookie engine, TCP keepalive and all built-in content encodings accepted.
 
 namespace net
 {
@@ -19,8 +18,8 @@ namespace net
 	// Performs a blocking GET request
 	Response get(const std::string& url, long timeout_ms = 4500);
 
-	// Performs a GET request on a separate thread
-	std::shared_future<Response> get_async(const std::string& url, long timeout_ms = 4500);
+	// Requests all URLs, at most max_parallel at a time. Responses are in the same order as urls.
+	std::vector<Response> get_all(const std::vector<std::string>& urls, size_t max_parallel, long timeout_ms = 4500);
 
 	// RAII wrapper around curl_global_init/curl_global_cleanup, create one in main()
 	struct global_init
