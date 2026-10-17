@@ -1,7 +1,6 @@
 #pragma once
 
-// cfg.json. Missing keys keep their defaults and unknown keys (such as the removed AAC options)
-// are ignored, so config files from older versions still load.
+// cfg.json. Missing keys keep their defaults and unknown keys are ignored, so old files still load.
 struct cfg_format
 {
 	std::string cid;
@@ -35,7 +34,6 @@ namespace cfg
 		bool show_help         = false; // -?
 		bool show_version      = false; // -version
 		bool cover_src_path    = false; // -isrc is an image file
-		bool cover_src_sc_link = false; // -isrc is a SoundCloud link (its cover art is used)
 		bool fresh_cfg         = false; // there was no cfg.json yet
 	} inline f;
 
@@ -58,7 +56,7 @@ namespace cfg
 	inline std::string client_id; // SoundCloud client ID
 	inline std::string audio_dir; // audio download directory, ends with '/' unless empty
 	inline std::string image_dir; // cover art download directory, ends with '/' unless empty
-	inline std::string image_src; // -isrc: image path, image link or SoundCloud link
+	inline std::string image_src; // -isrc: image file or image link
 
 	// Artist names to replace in the artist tag (-replace). Keys are lowercase, matching ignores case.
 	inline std::map<std::string, std::string> artist_replacements;

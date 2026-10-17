@@ -12,8 +12,7 @@ namespace media
 		const std::string repaired = path + ".repair";
 		std::error_code ec;
 
-		// The format is given explicitly because the file names used during a download don't
-		// end in ".m4a". "-c copy" only repackages the audio, nothing is re-encoded.
+		// The format is explicit because the temp file name doesn't end in .m4a; -c copy doesn't re-encode
 
 		const platform::run_result result = platform::run_program(
 			{

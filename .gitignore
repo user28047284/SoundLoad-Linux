@@ -1,2 +1,4 @@
 build/
 cfg.json
+CMakeUserPresets.json
+out/

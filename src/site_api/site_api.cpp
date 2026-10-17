@@ -19,7 +19,7 @@ static net::Response get_timed(const std::string& url)
 
 bool get_client_id(void)
 {
-	// If parsing fails but a client ID was already set (-cid or cfg.json), that one is kept
+	// Keeps an already set client ID (-cid or cfg.json) if parsing fails
 
 	auto parsing_failed = [](void)
 		{
@@ -61,8 +61,7 @@ bool get_client_id(void)
 	return true;
 }
 
-// GETs an api-v2 URL with the client ID added. If that fails, the client ID may have expired,
-// so a fresh one is fetched (once per run) and the request is retried. Failures are logged.
+// GETs an api-v2 URL with the client ID. On failure, fetches a fresh client ID (once per run) and retries.
 static net::Response api_get(const std::string& url)
 {
 	auto with_client_id = [&url](void)
@@ -111,8 +110,7 @@ static Json resolve_post(std::string url)
 	return api_get_json("https://api-v2.soundcloud.com/resolve?url=" + url);
 }
 
-// Returns parent[key] if it is an object, otherwise an empty object. SoundCloud sends some
-// objects (e.g. publisher_metadata) as null, and calling value() on a null throws.
+// parent[key] if it is an object, else an empty one (SoundCloud sends some as null, which breaks value())
 static Json get_object(const Json& parent, const char* key)
 {
 	const auto it = parent.find(key);
@@ -123,9 +121,7 @@ static Json get_object(const Json& parent, const char* key)
 //// COVER ART
 //
 
-// SoundCloud's artwork URLs point to a small version ("-large."). The full-size upload is
-// stored as "-original.", but not every image has one (profile pictures often don't), so
-// smaller versions are tried after it.
+// Artwork URLs point to a small version; tries "-original." first, then smaller ones (not every image has one)
 static net::Response get_artwork(const std::string& url)
 {
 	constexpr std::string_view large = "-large.";
@@ -151,8 +147,7 @@ static net::Response get_artwork(const std::string& url)
 	return r;
 }
 
-// The track's cover art, or the uploader's profile picture, which SoundCloud shows for tracks
-// without one. Empty if there is neither.
+// The track's artwork, or the uploader's avatar if it has none. Empty if neither.
 static std::string get_artwork_url(const Json& post_data)
 {
 	std::string url = post_data.value("artwork_url");
@@ -189,43 +184,54 @@ std::optional<TagLib::ByteVector> sc_upload::get_cover_art(void) const
 		return TagLib::ByteVector(data.data(), static_cast<unsigned int>(data.size()));
 	}
 
-	std::string url = this->artwork_url;
-
-	if (cfg::f.cover_src_sc_link)
-	{
-		const Json post = resolve_post(cfg::image_src);
-		if (post.is_discarded()) return std::nullopt;
-
-		url = get_artwork_url(post);
-	}
-	else if (!cfg::image_src.empty())
-	{
-		url = cfg::image_src;
-	}
-
-	if (url.empty())
+	if (cfg::image_src.empty() && this->artwork_url.empty())
 	{
 		err::warn("no cover art found, saving the track without one");
 		return std::nullopt;
 	}
 
-	const net::Response r = get_artwork(url);
+	net::Response linked;
+	const std::string* data = nullptr;
 
-	if (r.status_code != 200)
+	if (cfg::image_src.empty())
 	{
-		err::log_net(r);
-		return std::nullopt;
+		data = this->artwork_data();
+	}
+	else
+	{
+		linked = get_artwork(cfg::image_src);
+
+		if (linked.status_code == 200) data = &linked.text;
+		else                           err::log_net(linked);
 	}
 
-	if (!fits_in_tag(r.text.size())) return std::nullopt;
-	return TagLib::ByteVector(r.text.data(), static_cast<unsigned int>(r.text.size()));
+	if (!data || !fits_in_tag(data->size())) return std::nullopt;
+	return TagLib::ByteVector(data->data(), static_cast<unsigned int>(data->size()));
+}
+
+const std::string* sc_upload::artwork_data(void) const
+{
+	if (!this->artwork_cache)
+	{
+		const net::Response r = get_artwork(this->artwork_url);
+
+		if (r.status_code != 200)
+		{
+			err::log_net(r);
+			return nullptr;
+		}
+
+		this->artwork_cache = r.text;
+	}
+
+	return &*this->artwork_cache;
 }
 
 //
 //// METADATA
 //
 
-// Parses a whole string (or with prefix_only, the number at its start, e.g. "2019" in "2019-10-24")
+// Parses a whole string, or with prefix_only just the number at its start ("2019" in "2019-10-24")
 static std::optional<unsigned int> to_uint(const std::string_view text, const bool prefix_only = false)
 {
 	unsigned int value = 0;
@@ -239,10 +245,8 @@ static std::optional<unsigned int> to_uint(const std::string_view text, const bo
 	return value;
 }
 
-// Splits "Artist - Song" into its two halves at the FIRST separator, which is a hyphen, en dash
-// or em dash with a space on each side (so "Mid-Air" or "AC/DC" are never split). Everything after
-// the separator is kept, e.g. "A - B - Remix" -> "A" and "B - Remix". Returns false (and leaves
-// both strings untouched) if there is no separator or either half would be empty.
+// Splits "Artist - Song" at the first " - " (hyphen, en or em dash with spaces), so "Mid-Air" stays whole.
+// Returns false and leaves both strings untouched if there is no separator or a half is empty.
 static bool split_artist_and_title(const std::string& full, std::string& artist, std::string& title)
 {
 	constexpr std::string_view separators[] = { " - ", " \xE2\x80\x93 ", " \xE2\x80\x94 " };
@@ -292,8 +296,7 @@ static bool is_word_char(const char ch)
 	return c >= 0x80 || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
 }
 
-// Applies the -replace list to an artist string. Only whole names are replaced, so with
-// "-replace jay j", "4jay x jay" becomes "4jay x j". Matching ignores case.
+// Applies -replace to whole names only, ignoring case: "-replace jay j" turns "4jay x jay" into "4jay x j"
 static std::string replace_artist_names(std::string artist)
 {
 	for (const auto& [from, to] : cfg::artist_replacements)
@@ -323,8 +326,7 @@ static std::string replace_artist_names(std::string artist)
 
 bool sc_upload::find_stream(void)
 {
-	// SoundCloud only serves AAC (as HLS) now. aac_96k is only used without aac_160k. Some tracks
-	// only have encrypted streams ("cbc-encrypted-hls", "ctr-encrypted-hls"), which are skipped.
+	// AAC over HLS only. aac_96k is the fallback, encrypted streams are skipped.
 
 	const Json transcodings = get_object(this->post_data, "media").value("transcodings", Json::array());
 
@@ -403,12 +405,11 @@ void sc_upload::read_title(void)
 
 	this->title = cfg::overrides.title.empty() ? original : cfg::overrides.title;
 
-	// File names use the full title, so "-parse" can shorten the tag title without two songs
-	// called "Intro" ending up with the same file name
+	// The file name keeps the full title even when -parse shortens the tag title
 
 	this->file_title = this->title;
 
-	// -parse: "Artist - Title". Anything given explicitly with -title / -artists wins.
+	// -parse, but -title and -artists win
 
 	if (!cfg::f.parse_title)
 	{
@@ -431,7 +432,7 @@ void sc_upload::read_title(void)
 
 void sc_upload::replace_artist(void)
 {
-	// Runs after -parse so parsed artists are replaced too. An artist given with -artists is kept.
+	// After -parse so parsed artists are replaced too; -artists is kept as given
 
 	if (!cfg::overrides.artists.empty())
 	{
@@ -605,8 +606,7 @@ bool sc_upload::download(void)
 	return this->download_track();
 }
 
-// Asks whether to download a track again when its file already exists. Defaults to no, and
-// is always no when there is no terminal to ask (e.g. when sl is run from a script).
+// Asks before replacing an existing file. Always no when there is no terminal to ask.
 static bool confirm_overwrite(const std::string& name)
 {
 	err::warn("\"{}\" already exists in the download folder", name);
@@ -622,8 +622,7 @@ static bool confirm_overwrite(const std::string& name)
 
 bool sc_upload::download_segments(std::string& audio) const
 {
-	// The stream URL returns the URL of an HLS playlist (.m3u8). Its segments, in order, make up
-	// the file: first the MP4 header (#EXT-X-MAP), then one audio fragment per #EXTINF line.
+	// The stream URL gives an HLS playlist: the MP4 header (#EXT-X-MAP), then one fragment per #EXTINF.
 
 	const Json stream = api_get_json(this->stream_url);
 	const std::string playlist_url = stream.is_discarded() ? "" : stream.value("url");
@@ -672,6 +671,8 @@ bool sc_upload::download_segments(std::string& audio) const
 
 	const std::vector<net::Response> segments = net::get_all(urls, 20);
 
+	size_t total = 0;
+
 	for (const net::Response& r : segments)
 	{
 		if (r.status_code != 200)
@@ -679,7 +680,11 @@ bool sc_upload::download_segments(std::string& audio) const
 			err::log_net(r);
 			return false;
 		}
+
+		total += r.text.size();
 	}
+
+	audio.reserve(total);
 
 	for (const net::Response& r : segments)
 	{
@@ -691,7 +696,7 @@ bool sc_upload::download_segments(std::string& audio) const
 
 void sc_upload::write_tags(const std::string& path, const std::string& name) const
 {
-	// TagLib::String assumes Latin-1 for std::string, all of our strings are UTF-8
+	// TagLib assumes Latin-1 for std::string, ours are UTF-8
 
 	auto utf8 = [](const std::string& text) { return TagLib::String(text, TagLib::String::UTF8); };
 
@@ -754,9 +759,8 @@ bool sc_upload::download_track(void)
 		return false;
 	}
 
-	// The track is written, repaired and tagged under a hidden temporary name, then renamed into
-	// place. Music players that watch the folder (Spotify does) read a file as soon as it shows
-	// up and cache what they find, so they must never see it before its tags are written.
+	// Written under a hidden name and renamed when finished, so players watching the folder
+	// (Spotify) never see a file before its tags are written.
 
 	const std::string temp_path = cfg::audio_dir + "." + name + ".part";
 	std::error_code ec;
@@ -816,10 +820,9 @@ bool sc_upload::download_cover(void) const
 		return false;
 	}
 
-	const net::Response r = get_artwork(this->artwork_url);
-	if (r.status_code != 200)
+	const std::string* const data = this->artwork_data();
+	if (!data)
 	{
-		err::log_net(r);
 		return false;
 	}
 
@@ -828,7 +831,7 @@ bool sc_upload::download_cover(void) const
 	const bool existed = fs::exists(util::to_path(path));
 
 	std::ofstream file(util::to_path(path), std::ios::binary | std::ios::trunc);
-	file.write(r.text.data(), static_cast<std::streamsize>(r.text.size()));
+	file.write(data->data(), static_cast<std::streamsize>(data->size()));
 
 	if (file.fail())
 	{

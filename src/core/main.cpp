@@ -6,8 +6,7 @@
 #include "../site_api/site_api.hpp"
 #include "version.hpp"
 
-// Some distributions build TagLib with debug output enabled, which prints messages such as
-// "TagLib: Frame::checkEncoding() -- Rendering using UTF8." for every non-Latin-1 tag
+// Some TagLib builds print debug messages for every non-Latin-1 tag
 struct silent_taglib_listener : TagLib::DebugListener
 {
 	void printMessage(const TagLib::String&) override {}

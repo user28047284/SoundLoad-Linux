@@ -87,7 +87,7 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
   -idst, -img-dst <dir>       [S] folder for cover art images
   -aname, -audio-name <name>  audio file name (default: track title)
   -iname, -img-name <name>    cover art file name (default: track title)
-  -isrc, -img-src <source>    cover art to embed: image file, image link or SoundCloud track link
+  -isrc, -img-src <source>    cover art to embed: image file or image link
 
 [+] TAGS
   -t, -title <title>          title (default: track title)
@@ -195,12 +195,15 @@ Documentation: https://github.com/user28047284/SoundLoad-Linux
 			return false;
 		}
 
-		// Cover art source type
-
 		if (!image_src.empty())
 		{
-			f.cover_src_path    = fs::exists(util::to_path(image_src));
-			f.cover_src_sc_link = !f.cover_src_path && image_src.starts_with("https://soundcloud.com/");
+			f.cover_src_path = fs::exists(util::to_path(image_src));
+
+			if (!f.cover_src_path && (!util::istarts_with(image_src, "http") || util::istarts_with(image_src, "https://soundcloud.com/")))
+			{
+				err::log("-isrc must be an image file or an image link");
+				return false;
+			}
 		}
 
 		program_dir = platform::executable_dir();

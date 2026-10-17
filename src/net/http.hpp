@@ -3,8 +3,7 @@
 #include <string>
 #include <vector>
 
-// Minimal libcurl wrapper. Session defaults: "curl/<version>" user agent, redirects followed
-// (max 50), in-memory cookie engine, TCP keepalive and all built-in content encodings accepted.
+// Minimal libcurl wrapper: curl user agent, redirects, cookies, keepalive and compression
 
 namespace net
 {

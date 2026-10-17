@@ -20,6 +20,7 @@ private:
 
 	std::string stream_url; // api-v2 URL that returns the HLS playlist
 	std::string artwork_url;
+	mutable std::optional<std::string> artwork_cache; // fetched once, used by the cover file and the tag
 
 	// Tag values
 	std::string  title;
@@ -46,6 +47,7 @@ private:
 	bool download_cover(void) const;
 	bool download_segments(std::string& audio) const;
 
+	const std::string* artwork_data(void) const;
 	std::optional<TagLib::ByteVector> get_cover_art(void) const;
 	void write_tags(const std::string& path, const std::string& name) const;
 };

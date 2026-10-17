@@ -1,7 +1,6 @@
 #pragma once
 
-// The last 10 downloads, for -undo. Stored in $XDG_STATE_HOME/soundload/history.json
-// (~/.local/state/soundload/history.json), newest first.
+// The last 10 downloads for -undo, newest first, in the platform's state folder
 
 namespace history
 {

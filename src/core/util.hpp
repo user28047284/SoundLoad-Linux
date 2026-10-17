@@ -13,8 +13,7 @@ namespace util
 	// control characters become underscores, and Windows device names (CON, NUL, COM1...) get one added
 	std::string sanitize_filename(std::string name);
 
-	// Converts between UTF-8 strings and paths. Always use these for file access: on Windows a
-	// plain std::string is read in the ANSI code page, which breaks names like "💎💎".
+	// UTF-8 <-> path. Use these for file access: on Windows a plain std::string is read as ANSI.
 	std::filesystem::path to_path(std::string_view utf8);
 	std::string           to_utf8(const std::filesystem::path& path);
 

@@ -125,8 +125,7 @@ namespace platform
 		return _isatty(_fileno(stdin));
 	}
 
-	// Quotes an argument the way the Microsoft C runtime splits command lines: backslashes are
-	// only special before a quote, so those are doubled.
+	// Quotes an argument for the Microsoft C runtime (backslashes only matter before a quote)
 	static void append_argument(std::wstring& command_line, const std::wstring& arg)
 	{
 		if (!command_line.empty())
@@ -241,8 +240,7 @@ namespace platform
 			return;
 		}
 
-		// The user PATH is HKEY_CURRENT_USER\Environment\Path. It is edited directly instead of
-		// with setx, which cuts values off at 1024 characters.
+		// Edits the user PATH in the registry directly: setx cuts values off at 1024 characters
 
 		HKEY key = nullptr;
 		if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Environment", 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &key) != ERROR_SUCCESS)
@@ -291,8 +289,7 @@ namespace platform
 			std::cout << "    Your current user PATH (keep a copy to undo the change):\n    " << narrow(user_path) << '\n';
 		}
 
-		// Asked with a dialog like the original Windows SoundLoad, but only when someone is there to
-		// answer it: in a script a dialog would wait forever
+		// A dialog, but only with a terminal: in a script it would wait forever
 
 		const std::wstring question = L"Add sl's folder to your PATH?\n\n" + dir +
 			L"\n\nThen you can run sl from any folder in a new terminal.";
@@ -326,7 +323,7 @@ namespace platform
 
 	void pause_if_double_clicked(void)
 	{
-		// A console started by Explorer belongs to sl alone, one started by cmd or PowerShell is shared
+		// A console started by Explorer belongs to sl alone
 
 		DWORD process_ids[2];
 

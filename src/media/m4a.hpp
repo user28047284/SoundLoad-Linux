@@ -10,8 +10,7 @@ namespace media
 		invalid         // ffmpeg could not read the file, so it is not valid audio
 	};
 
-	// SoundCloud's AAC streams are HLS fragments. Joining them gives a "fragmented MP4" whose
-	// header says the duration is 0, so players such as Spotify show no track length. This
-	// repackages the file into a regular MP4 with ffmpeg (no re-encoding, nothing is lost).
+	// Joined HLS fragments form a fragmented MP4 with duration 0, so players show no length.
+	// Repackages the file into a regular MP4 with ffmpeg (no re-encoding).
 	repair_result repair_fragmented_m4a(const std::string& path);
 }

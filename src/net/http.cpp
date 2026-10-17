@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <memory>
 #include <thread>
 
 #include <curl/curl.h>
@@ -14,19 +15,22 @@ namespace net
 		return size * count;
 	}
 
-	Response get(const std::string& url, long timeout_ms)
+	struct curl_deleter
+	{
+		void operator()(CURL* curl) const { curl_easy_cleanup(curl); }
+	};
+
+	using curl_handle = std::unique_ptr<CURL, curl_deleter>;
+
+	// A handle can be reused for several requests, which keeps its connection open
+	static Response perform(CURL* const curl, const std::string& url, const long timeout_ms)
 	{
 		Response r;
 		r.url = url;
 
-		CURL* const curl = curl_easy_init();
-		if (!curl)
-		{
-			return r;
-		}
-
 		static const std::string user_agent = std::string("curl/") + curl_version_info(CURLVERSION_NOW)->version;
 
+		curl_easy_reset(curl);
 		curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 		curl_easy_setopt(curl, CURLOPT_USERAGENT, user_agent.c_str());
 		curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -55,8 +59,13 @@ namespace net
 			r.status_code = 0;
 		}
 
-		curl_easy_cleanup(curl);
 		return r;
+	}
+
+	Response get(const std::string& url, const long timeout_ms)
+	{
+		const curl_handle curl(curl_easy_init());
+		return curl ? perform(curl.get(), url, timeout_ms) : Response{ 0, {}, url };
 	}
 
 	std::vector<Response> get_all(const std::vector<std::string>& urls, const size_t max_parallel, const long timeout_ms)
@@ -72,9 +81,11 @@ namespace net
 			{
 				workers.emplace_back([&](void)
 					{
+						const curl_handle curl(curl_easy_init());
+
 						for (size_t index; (index = next++) < urls.size();)
 						{
-							responses[index] = get(urls[index], timeout_ms);
+							responses[index] = curl ? perform(curl.get(), urls[index], timeout_ms) : Response{ 0, {}, urls[index] };
 						}
 					});
 			}
